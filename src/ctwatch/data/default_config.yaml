@@ -1,0 +1,68 @@
+# ctwatch configuration.
+#
+# The watchlist below is a starting point built from organisations whose
+# impersonation has already been documented publicly. Replace it with your own.
+#
+# `allowlist` is not optional in practice: large newsrooms register dozens of
+# defensive lookalike domains themselves. Without it, the tool drowns you in
+# findings that turn out to belong to the brand you are protecting.
+
+targets:
+  - brand: "Le Monde"
+    canonical_domains: ["lemonde.fr"]
+    allowlist: []
+    keywords: ["actu", "info", "news", "live", "fr"]
+
+  - brand: "Le Figaro"
+    canonical_domains: ["lefigaro.fr"]
+    allowlist: []
+    keywords: ["actu", "info", "news", "live", "fr"]
+
+  - brand: "Libération"
+    canonical_domains: ["liberation.fr"]
+    allowlist: []
+    keywords: ["actu", "info", "news", "live", "fr"]
+
+  - brand: "France Info"
+    canonical_domains: ["francetvinfo.fr"]
+    allowlist: []
+    keywords: ["actu", "info", "news", "live", "fr"]
+
+  - brand: "Gouvernement"
+    canonical_domains: ["gouvernement.fr"]
+    allowlist: []
+    keywords: ["gouv", "officiel", "info", "fr"]
+
+  - brand: "Service Public"
+    canonical_domains: ["service-public.fr"]
+    allowlist: []
+    keywords: ["gouv", "officiel", "demarches", "fr"]
+
+scoring:
+  tld_risk:
+    high: ["top", "xyz", "icu", "sbs", "cfd", "info", "shop", "click", "live"]
+    medium: ["net", "org", "co", "online", "site"]
+  weights:
+    levenshtein: 0.3
+    homoglyph: 0.25
+    keyword_combo: 0.2
+    tld_risk: 0.15
+    cert_age: 0.1
+  review_threshold: 0.5
+
+sources:
+  crtsh:
+    enabled: true
+    rate_limit_rps: 0.5
+    timeout_seconds: 45.0
+  certspotter:
+    enabled: false
+    api_key_env: "CERTSPOTTER_API_KEY"
+  certstream:
+    enabled: false
+    url: "wss://certstream.calidog.io/"
+    fallback_to_polling: true
+
+storage:
+  database: "ctwatch.db"
+  evidence_dir: "evidence"
