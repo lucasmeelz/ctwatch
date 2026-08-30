@@ -69,7 +69,14 @@ select = [
     "PTH",      # use pathlib
     "RUF",
 ]
-ignore = ["B008"]  # typer relies on function calls in argument defaults
+ignore = [
+    "B008",  # typer relies on function calls in argument defaults
+    # Confusable characters are the subject matter, not an accident: rules that
+    # flag ambiguous Unicode would fire on every homoglyph fixture in the suite.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
