@@ -98,12 +98,13 @@ def normalize(raw: str) -> DomainName:
         msg = "domain name must not be empty"
         raise InvalidDomainNameError(msg)
 
-    if candidate.isascii():
-        ascii_name = candidate
-        unicode_name = _to_unicode(candidate)
-    else:
-        ascii_name = _to_ascii(candidate)
-        unicode_name = candidate
+    ascii_name = candidate if candidate.isascii() else _to_ascii(candidate)
+
+    # The readable form is always derived from the encoded one, never kept as
+    # typed. Cherokee is the case that makes this necessary: IDNA case-folds it
+    # towards its capital letters, so the U-label of a name written with the
+    # small forms is not the string that was handed in.
+    unicode_name = _to_unicode(ascii_name)
 
     if not _is_plausible(ascii_name):
         msg = f"not a usable domain name: {raw!r}"
