@@ -70,9 +70,9 @@ def test_domain_upsert_widens_the_seen_window(repository: Repository) -> None:
 
 
 def test_domain_upsert_keeps_known_unicode_name(repository: Repository) -> None:
-    repository.upsert_domain(name="xn--lemnde-cua.fr", unicode_name="lemоnde.fr", is_idn=True)
-    repository.upsert_domain(name="xn--lemnde-cua.fr")
-    record = repository.get_domain("xn--lemnde-cua.fr")
+    repository.upsert_domain(name="xn--lemnde-yqf.fr", unicode_name="lemоnde.fr", is_idn=True)
+    repository.upsert_domain(name="xn--lemnde-yqf.fr")
+    record = repository.get_domain("xn--lemnde-yqf.fr")
     assert record is not None
     assert record.unicode_name == "lemоnde.fr"
     assert record.is_idn is True

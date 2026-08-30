@@ -13,7 +13,7 @@ from ctwatch.net.client import (
 )
 from ctwatch.net.policy import allowed_hosts, build_allowlist
 
-WATCHED_DOMAINS = ["lemonde.fr", "lemonde-actu.info", "xn--lemnde-cua.fr"]
+WATCHED_DOMAINS = ["lemonde.fr", "lemonde-actu.info", "xn--lemnde-yqf.fr"]
 
 
 def client(handler: httpx.MockTransport, **kwargs: object) -> PassiveHttpClient:
