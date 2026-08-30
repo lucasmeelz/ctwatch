@@ -200,8 +200,18 @@ def test_bitsquatting_only_yields_legal_characters(
     for name in produced:
         label = name.removesuffix(".fr")
         assert all(character in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in label)
-    # A single flipped bit turns "l" (0x6c) into "m" (0x6d).
-    assert "memonde.fr" in produced
+    # A single flipped bit turns "l" (0x6c) into "d" (0x64).
+    assert "demonde.fr" in produced
+    # "memonde.fr" is also one bit away, but m sits next to l on a keyboard, so
+    # it is attributed to the more plausible technique instead.
+    assert "memonde.fr" not in produced
+
+
+def test_a_name_is_attributed_to_its_most_plausible_technique(
+    generator: PermutationGenerator,
+) -> None:
+    by_name = {p.name.ascii_name: p.kind for p in generator.generate("lemonde.fr")}
+    assert by_name["memonde.fr"] == PermutationKind.REPLACEMENT
 
 
 def test_tld_swap_keeps_the_label(generator: PermutationGenerator) -> None:
@@ -215,9 +225,7 @@ def test_tld_swap_keeps_the_label(generator: PermutationGenerator) -> None:
 
 def test_extra_tlds_are_honoured() -> None:
     generator = PermutationGenerator(extra_tlds=["quebec"])
-    assert "lemonde.quebec" in names_of(
-        generator.generate("lemonde.fr"), PermutationKind.TLD_SWAP
-    )
+    assert "lemonde.quebec" in names_of(generator.generate("lemonde.fr"), PermutationKind.TLD_SWAP)
 
 
 def test_suffix_merge_folds_the_suffix_into_the_label(
