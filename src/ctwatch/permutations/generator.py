@@ -14,11 +14,11 @@ as a number with no provenance.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
-from enum import StrEnum
 
-from ctwatch.names import DomainName, InvalidDomainNameError, normalize
+from ctwatch.names import InvalidDomainNameError, normalize
+from ctwatch.permutations.homoglyph import HomoglyphGenerator
 from ctwatch.permutations.keyboards import DEFAULT_LAYOUTS, keyboard_neighbours
+from ctwatch.permutations.model import Candidate, Permutation, PermutationKind
 from ctwatch.publicsuffix import split
 
 LABEL_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789-")
@@ -63,29 +63,6 @@ DEFAULT_TLDS: tuple[str, ...] = (
 MERGE_TLDS: tuple[str, ...] = ("com", "net", "org", "info")
 
 
-class PermutationKind(StrEnum):
-    """How a candidate was derived from the watched name."""
-
-    HOMOGLYPH = "homoglyph"
-    REPLACEMENT = "replacement"
-    OMISSION = "omission"
-    TRANSPOSITION = "transposition"
-    REPETITION = "repetition"
-    INSERTION = "insertion"
-    HYPHENATION = "hyphenation"
-    VOWEL_SWAP = "vowel_swap"
-    BITSQUAT = "bitsquat"
-    KEYWORD = "keyword"
-    SUFFIX_MERGE = "suffix_merge"
-    TLD_SWAP = "tld_swap"
-
-    @property
-    def preserves_suffix(self) -> bool:
-        """Whether the technique leaves the public suffix untouched."""
-
-        return self not in {PermutationKind.SUFFIX_MERGE, PermutationKind.TLD_SWAP}
-
-
 # Emission order, most plausible first, so that `--limit` keeps what matters.
 KIND_ORDER: tuple[PermutationKind, ...] = (
     PermutationKind.HOMOGLYPH,
@@ -101,30 +78,6 @@ KIND_ORDER: tuple[PermutationKind, ...] = (
     PermutationKind.SUFFIX_MERGE,
     PermutationKind.TLD_SWAP,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class Permutation:
-    """One candidate name, with the reason it was generated."""
-
-    name: DomainName
-    kind: PermutationKind
-    detail: str
-    base: str
-
-    @property
-    def ascii_name(self) -> str:
-        return self.name.ascii_name
-
-
-@dataclass(frozen=True, slots=True)
-class Candidate:
-    """An intermediate result, before the full name is assembled."""
-
-    label: str
-    kind: PermutationKind
-    detail: str
-    suffix: str | None = None
 
 
 def is_valid_label(label: str) -> bool:
@@ -270,8 +223,10 @@ class PermutationGenerator:
         extra_tlds: Iterable[str] = (),
         merge_tlds: Iterable[str] = MERGE_TLDS,
         kinds: Iterable[PermutationKind] | None = None,
+        homoglyphs: HomoglyphGenerator | None = None,
     ) -> None:
         self._layouts = layouts
+        self._homoglyphs = homoglyphs or HomoglyphGenerator()
         self._tlds = tuple(dict.fromkeys([*DEFAULT_TLDS, *(t.strip().lower() for t in extra_tlds)]))
         self._merge_tlds = tuple(merge_tlds)
         self._kinds = frozenset(kinds) if kinds is not None else frozenset(PermutationKind)
@@ -303,7 +258,9 @@ class PermutationGenerator:
         """Yield candidate names derived from ``domain``, most plausible first.
 
         A subdomain in the input is ignored: watching ``www.lemonde.fr`` and
-        watching ``lemonde.fr`` are the same request.
+        watching ``lemonde.fr`` are the same request. A name reachable by more
+        than one technique is attributed to the first one that produces it,
+        which is the most plausible one given the emission order.
         """
 
         parts = split(domain)
@@ -317,6 +274,16 @@ class PermutationGenerator:
         base = parts.registrable_domain
         seen: set[str] = {base}
         emitted = 0
+
+        if PermutationKind.HOMOGLYPH in self._kinds:
+            for permutation in self._homoglyphs.variants(domain):
+                if permutation.name.ascii_name in seen:
+                    continue
+                seen.add(permutation.name.ascii_name)
+                yield permutation
+                emitted += 1
+                if limit is not None and emitted >= limit:
+                    return
 
         for candidate in self._candidates(parts.registrable_label, parts.suffix):
             if not is_valid_label(candidate.label):
