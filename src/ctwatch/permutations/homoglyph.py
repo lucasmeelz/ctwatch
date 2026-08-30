@@ -254,7 +254,8 @@ class HomoglyphGenerator:
             raise ValueError(msg)
 
         label, suffix = parts.registrable_label, parts.suffix
-        seen: set[str] = {base, label}
+        seen_labels: set[str] = {label}
+        seen_names: set[str] = {base}
 
         streams: list[Iterator[tuple[str, str]]] = []
         if self._include_ascii:
@@ -266,16 +267,16 @@ class HomoglyphGenerator:
 
         for stream in streams:
             for mutated, detail in stream:
-                if mutated in seen or not mutated:
+                if not mutated or mutated in seen_labels:
                     continue
-                seen.add(mutated)
+                seen_labels.add(mutated)
                 try:
                     name = normalize(f"{mutated}.{suffix}")
                 except InvalidDomainNameError:
                     continue
-                if name.ascii_name in seen:
+                if name.ascii_name in seen_names:
                     continue
-                seen.add(name.ascii_name)
+                seen_names.add(name.ascii_name)
                 yield Permutation(
                     name=name,
                     kind=PermutationKind.HOMOGLYPH,

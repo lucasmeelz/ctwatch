@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Iterator
 
 from ctwatch.names import InvalidDomainNameError, normalize
+from ctwatch.permutations.dictionary import KeywordGenerator
 from ctwatch.permutations.homoglyph import HomoglyphGenerator
 from ctwatch.permutations.keyboards import DEFAULT_LAYOUTS, keyboard_neighbours
 from ctwatch.permutations.model import Candidate, Permutation, PermutationKind
@@ -223,10 +224,12 @@ class PermutationGenerator:
         extra_tlds: Iterable[str] = (),
         merge_tlds: Iterable[str] = MERGE_TLDS,
         kinds: Iterable[PermutationKind] | None = None,
+        keywords: Iterable[str] = (),
         homoglyphs: HomoglyphGenerator | None = None,
     ) -> None:
         self._layouts = layouts
         self._homoglyphs = homoglyphs or HomoglyphGenerator()
+        self._keywords = KeywordGenerator(keywords=keywords)
         self._tlds = tuple(dict.fromkeys([*DEFAULT_TLDS, *(t.strip().lower() for t in extra_tlds)]))
         self._merge_tlds = tuple(merge_tlds)
         self._kinds = frozenset(kinds) if kinds is not None else frozenset(PermutationKind)
@@ -235,8 +238,12 @@ class PermutationGenerator:
     def kinds(self) -> frozenset[PermutationKind]:
         return self._kinds
 
-    def _candidates(self, label: str, suffix: str) -> Iterator[Candidate]:
-        by_kind: dict[PermutationKind, Iterator[Candidate]] = {
+    def _label_candidates(
+        self, label: str, suffix: str
+    ) -> dict[PermutationKind, Iterator[Candidate]]:
+        """Techniques that rewrite the label, keyed by the kind they produce."""
+
+        return {
             PermutationKind.REPLACEMENT: _replacements(label, self._layouts),
             PermutationKind.OMISSION: _omissions(label),
             PermutationKind.TRANSPOSITION: _transpositions(label),
@@ -248,11 +255,6 @@ class PermutationGenerator:
             PermutationKind.SUFFIX_MERGE: _suffix_merges(label, suffix, self._merge_tlds),
             PermutationKind.TLD_SWAP: _tld_swaps(label, suffix, self._tlds),
         }
-        for kind in KIND_ORDER:
-            stream = by_kind.get(kind)
-            if stream is None or kind not in self._kinds:
-                continue
-            yield from stream
 
     def generate(self, domain: str, *, limit: int | None = None) -> Iterator[Permutation]:
         """Yield candidate names derived from ``domain``, most plausible first.
@@ -275,34 +277,49 @@ class PermutationGenerator:
         seen: set[str] = {base}
         emitted = 0
 
-        if PermutationKind.HOMOGLYPH in self._kinds:
-            for permutation in self._homoglyphs.variants(domain):
-                if permutation.name.ascii_name in seen:
+        # Homoglyphs and keyword combinations produce whole names; the typo
+        # techniques produce labels that still need a suffix attached.
+        name_streams: dict[PermutationKind, Iterator[Permutation]] = {
+            PermutationKind.HOMOGLYPH: self._homoglyphs.variants(domain),
+            PermutationKind.KEYWORD: self._keywords.variants(domain),
+        }
+        label_streams = self._label_candidates(parts.registrable_label, parts.suffix)
+
+        for kind in KIND_ORDER:
+            if kind not in self._kinds:
+                continue
+
+            if kind in name_streams:
+                for permutation in name_streams[kind]:
+                    if permutation.name.ascii_name in seen:
+                        continue
+                    seen.add(permutation.name.ascii_name)
+                    yield permutation
+                    emitted += 1
+                    if limit is not None and emitted >= limit:
+                        return
+                continue
+
+            for candidate in label_streams.get(kind, iter(())):
+                if not is_valid_label(candidate.label):
                     continue
-                seen.add(permutation.name.ascii_name)
-                yield permutation
+                full = f"{candidate.label}.{candidate.suffix or parts.suffix}"
+                if full in seen:
+                    continue
+                try:
+                    name = normalize(full)
+                except InvalidDomainNameError:
+                    seen.add(full)
+                    continue
+                if name.ascii_name in seen:
+                    continue
+
+                seen.add(full)
+                seen.add(name.ascii_name)
+                yield Permutation(
+                    name=name, kind=candidate.kind, detail=candidate.detail, base=base
+                )
+
                 emitted += 1
                 if limit is not None and emitted >= limit:
                     return
-
-        for candidate in self._candidates(parts.registrable_label, parts.suffix):
-            if not is_valid_label(candidate.label):
-                continue
-
-            full = f"{candidate.label}.{candidate.suffix or parts.suffix}"
-            if full in seen:
-                continue
-            try:
-                name = normalize(full)
-            except InvalidDomainNameError:
-                continue
-            if name.ascii_name in seen:
-                continue
-
-            seen.add(full)
-            seen.add(name.ascii_name)
-            yield Permutation(name=name, kind=candidate.kind, detail=candidate.detail, base=base)
-
-            emitted += 1
-            if limit is not None and emitted >= limit:
-                return
