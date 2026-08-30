@@ -1,0 +1,92 @@
+[project]
+name = "ctwatch"
+version = "0.1.0"
+description = "Detect and document domains impersonating news outlets and public institutions, using Certificate Transparency logs."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Lucas Deschamps" }]
+keywords = ["certificate-transparency", "osint", "disinformation", "typosquatting", "threat-intelligence"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+]
+dependencies = [
+    "typer>=0.15",
+    "rich>=13.9",
+    "httpx>=0.28",
+    "websockets>=14.0",
+    "pydantic>=2.10",
+    "pyyaml>=6.0",
+    "idna>=3.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/lucasmeelz/ctwatch"
+Issues = "https://github.com/lucasmeelz/ctwatch/issues"
+
+[project.scripts]
+ctwatch = "ctwatch.cli:app"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-pyyaml>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ctwatch"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "A",        # builtins shadowing
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "PTH",      # use pathlib
+    "RUF",
+]
+ignore = ["B008"]  # typer relies on function calls in argument defaults
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+warn_unreachable = true
+disallow_any_explicit = false
+plugins = []
+
+[[tool.mypy.overrides]]
+module = ["websockets.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
