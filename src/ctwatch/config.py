@@ -128,6 +128,19 @@ class SourcesConfig(StrictModel):
     certstream: CertStreamConfig = Field(default_factory=CertStreamConfig)
 
 
+class PermutationsConfig(StrictModel):
+    """How candidate names are generated for each watched domain."""
+
+    keyboard_layouts: list[str] = Field(default_factory=lambda: ["azerty", "qwerty"])
+    extra_tlds: list[str] = Field(default_factory=list)
+    include_homoglyphs: bool = True
+
+    @field_validator("extra_tlds", mode="after")
+    @classmethod
+    def _normalize(cls, value: list[str]) -> list[str]:
+        return [item.strip().lower().lstrip(".") for item in value if item.strip()]
+
+
 class StorageConfig(StrictModel):
     database: Path = Path("ctwatch.db")
     evidence_dir: Path = Path("evidence")
@@ -155,6 +168,7 @@ class Config(StrictModel):
     targets: list[TargetConfig] = Field(default_factory=list)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
+    permutations: PermutationsConfig = Field(default_factory=PermutationsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
 

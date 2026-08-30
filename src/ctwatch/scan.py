@@ -17,6 +17,8 @@ import httpx
 from ctwatch.config import Config
 from ctwatch.net.client import PassiveHttpClient, UpstreamError
 from ctwatch.net.policy import build_allowlist
+from ctwatch.permutations.generator import PermutationGenerator
+from ctwatch.permutations.model import PermutationKind
 from ctwatch.sources.base import CertObservation, Source, SourceError, SourceQuery
 from ctwatch.sources.crtsh import CrtShSource
 from ctwatch.store.evidence import EvidenceStore
@@ -31,6 +33,7 @@ class ScanSummary:
     brand: str
     canonical_domain: str
     queries: int = 0
+    variants_queried: int = 0
     certificates: int = 0
     domains_seen: int = 0
     new_domains: int = 0
@@ -42,12 +45,27 @@ class ScanSummary:
             "brand": self.brand,
             "canonical_domain": self.canonical_domain,
             "queries": self.queries,
+            "variants_queried": self.variants_queried,
             "certificates": self.certificates,
             "domains_seen": self.domains_seen,
             "new_domains": self.new_domains,
             "observations": self.observations,
             "errors": list(self.errors),
         }
+
+
+def build_permutation_generator(config: Config, target: WatchTarget) -> PermutationGenerator:
+    """A generator configured for one target, using that target's keywords."""
+
+    kinds = set(PermutationKind)
+    if not config.permutations.include_homoglyphs:
+        kinds.discard(PermutationKind.HOMOGLYPH)
+    return PermutationGenerator(
+        layouts=tuple(config.permutations.keyboard_layouts),
+        extra_tlds=config.permutations.extra_tlds,
+        keywords=target.keywords,
+        kinds=kinds,
+    )
 
 
 def build_sources(
@@ -131,23 +149,56 @@ async def scan_target(
     sources: list[Source],
     repository: Repository,
     since: datetime | None = None,
+    queries: list[SourceQuery] | None = None,
 ) -> ScanSummary:
     """Run every source against one target and persist the results."""
 
     summary = ScanSummary(brand=target.brand, canonical_domain=target.canonical_domain)
-    query = SourceQuery(pattern=target.canonical_domain, exact=True, since=since)
+    planned = queries or [SourceQuery(pattern=target.canonical_domain, exact=True, since=since)]
 
     for source in sources:
-        summary.queries += 1
-        try:
-            async for observation in source.search(query):
-                persist_observation(repository, observation, target=target, summary=summary)
-        except (SourceError, UpstreamError) as exc:
-            # One source failing is normal — crt.sh alone is unavailable often
-            # enough that aborting the whole scan would make the tool useless.
-            summary.errors.append(f"{source.name}: {exc}")
+        for query in planned:
+            summary.queries += 1
+            try:
+                async for observation in source.search(query):
+                    persist_observation(repository, observation, target=target, summary=summary)
+            except (SourceError, UpstreamError) as exc:
+                # One failure is normal — crt.sh alone is unavailable often
+                # enough that aborting the scan would make the tool useless.
+                summary.errors.append(f"{source.name}: {exc}")
 
     return summary
+
+
+def plan_queries(
+    *,
+    config: Config,
+    target: WatchTarget,
+    since: datetime | None,
+    variants: int,
+) -> list[SourceQuery]:
+    """The canonical domain, plus the generated candidates worth looking up.
+
+    Each candidate costs one request against a rate-limited service, so how
+    many to look up is a deliberate choice rather than a hidden default.
+    Matching the whole candidate set at once is what the live feed is for.
+    """
+
+    planned = [SourceQuery(pattern=target.canonical_domain, exact=True, since=since)]
+    if variants <= 0:
+        return planned
+
+    generator = build_permutation_generator(config, target)
+    planned.extend(
+        SourceQuery(
+            pattern=permutation.name.ascii_name,
+            exact=True,
+            since=since,
+            include_subdomains=False,
+        )
+        for permutation in generator.generate(target.canonical_domain, limit=variants)
+    )
+    return planned
 
 
 async def run_scan(
@@ -158,6 +209,7 @@ async def run_scan(
     targets: list[WatchTarget],
     since: datetime | None = None,
     only_sources: list[str] | None = None,
+    variants: int = 0,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> list[ScanSummary]:
     """Scan every requested target, then close the network client.
@@ -183,9 +235,18 @@ async def run_scan(
             msg = "no source is enabled; check the `sources` section of the configuration"
             raise SourceError(msg)
 
-        return [
-            await scan_target(target=target, sources=sources, repository=repository, since=since)
-            for target in targets
-        ]
+        summaries: list[ScanSummary] = []
+        for target in targets:
+            planned = plan_queries(config=config, target=target, since=since, variants=variants)
+            summary = await scan_target(
+                target=target,
+                sources=sources,
+                repository=repository,
+                since=since,
+                queries=planned,
+            )
+            summary.variants_queried = max(0, len(planned) - 1)
+            summaries.append(summary)
+        return summaries
     finally:
         await http.aclose()

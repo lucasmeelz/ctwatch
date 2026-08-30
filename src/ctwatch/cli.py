@@ -22,6 +22,8 @@ from ctwatch.config import DEFAULT_CONFIG_FILENAME, Config, ConfigError, load_co
 from ctwatch.names import InvalidDomainNameError, normalize
 from ctwatch.net.client import NetworkPolicyError
 from ctwatch.net.policy import allowed_hosts
+from ctwatch.permutations.generator import PermutationGenerator
+from ctwatch.permutations.model import Permutation, PermutationKind
 from ctwatch.scan import run_scan
 from ctwatch.sources.base import SourceError
 from ctwatch.store.database import open_database
@@ -272,6 +274,97 @@ def target_list(
     _emit(state, [_target_payload(target) for target in targets], render)
 
 
+def _permutation_payload(permutation: Permutation) -> dict[str, Any]:
+    return {
+        "name": permutation.name.ascii_name,
+        "display_name": permutation.name.unicode_name,
+        "idn": permutation.name.is_idn,
+        "kind": permutation.kind.value,
+        "detail": permutation.detail,
+        "base": permutation.base,
+    }
+
+
+@app.command()
+def permutations(
+    ctx: typer.Context,
+    domain: Annotated[str, typer.Argument(help="Domain to derive candidates from.")],
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Stop after this many candidates.")
+    ] = None,
+    include_homoglyphs: Annotated[
+        bool,
+        typer.Option(
+            "--include-homoglyphs/--no-homoglyphs",
+            help="Include lookalike characters from other scripts.",
+        ),
+    ] = True,
+    kind: Annotated[
+        list[str] | None,
+        typer.Option("--kind", help="Restrict to one technique. Repeatable."),
+    ] = None,
+    keyword: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--keyword",
+            help="Word to combine with the name. Defaults to the watchlist entry's own.",
+        ),
+    ] = None,
+) -> None:
+    """Show the candidate names a scan would look up. Contacts nothing."""
+
+    state = _state(ctx)
+    config = _load(state)
+
+    kinds = set(PermutationKind)
+    if kind:
+        try:
+            kinds = {PermutationKind(value.strip().lower()) for value in kind}
+        except ValueError:
+            known = ", ".join(sorted(item.value for item in PermutationKind))
+            _fail(f"unknown technique; known techniques: {known}", state=state)
+            return
+    if not include_homoglyphs:
+        kinds.discard(PermutationKind.HOMOGLYPH)
+
+    keywords = list(keyword or [])
+    if not keywords:
+        configured = config.target_for_domain(domain)
+        if configured is not None:
+            keywords = list(configured.keywords)
+
+    generator = PermutationGenerator(
+        layouts=tuple(config.permutations.keyboard_layouts),
+        extra_tlds=config.permutations.extra_tlds,
+        keywords=keywords,
+        kinds=kinds,
+    )
+
+    try:
+        produced = list(generator.generate(domain, limit=limit))
+    except ValueError as exc:
+        _fail(str(exc), state=state)
+        return
+
+    def render() -> None:
+        table = Table(title=f"Candidates derived from {domain}", title_justify="left")
+        table.add_column("Name")
+        table.add_column("As displayed")
+        table.add_column("Technique")
+        table.add_column("Why")
+        for permutation in produced:
+            table.add_row(
+                permutation.name.ascii_name,
+                permutation.name.unicode_name if permutation.name.is_idn else "",
+                permutation.kind.value,
+                permutation.detail,
+            )
+        console.print(table)
+        console.print(f"[dim]{len(produced)} candidate(s); nothing was contacted[/dim]")
+
+    _emit(state, [_permutation_payload(permutation) for permutation in produced], render)
+
+
 @app.command()
 def scan(
     ctx: typer.Context,
@@ -287,6 +380,16 @@ def scan(
         list[str] | None,
         typer.Option("--source", help="Restrict to one source, e.g. crtsh. Repeatable."),
     ] = None,
+    variants: Annotated[
+        int,
+        typer.Option(
+            "--variants",
+            help=(
+                "Also look up this many generated candidates per target. "
+                "Each one is a separate request to a rate-limited service."
+            ),
+        ),
+    ] = 0,
 ) -> None:
     """Query the Certificate Transparency sources for the watched domains."""
 
@@ -332,6 +435,7 @@ def scan(
                     targets=selected,
                     since=cutoff,
                     only_sources=source,
+                    variants=variants,
                 )
             )
         except (SourceError, NetworkPolicyError) as exc:
@@ -342,6 +446,7 @@ def scan(
         table = Table(title="Scan", title_justify="left")
         table.add_column("Brand")
         table.add_column("Domain")
+        table.add_column("Queries", justify="right")
         table.add_column("Certificates", justify="right")
         table.add_column("Names", justify="right")
         table.add_column("New", justify="right")
@@ -349,6 +454,7 @@ def scan(
             table.add_row(
                 summary.brand,
                 summary.canonical_domain,
+                str(summary.queries),
                 str(summary.certificates),
                 str(summary.domains_seen),
                 str(summary.new_domains),
@@ -357,6 +463,13 @@ def scan(
         for summary in summaries:
             for message in summary.errors:
                 error_console.print(f"[yellow]{summary.canonical_domain}[/yellow] {message}")
+        if variants <= 0:
+            console.print(
+                "\n[dim]Only the watched names were looked up. A domain registered with a "
+                "lookalike character will not appear in a search for the original spelling; "
+                "pass --variants N to look up generated candidates as well, or run "
+                "`ctwatch permutations <domain>` to see them first.[/dim]"
+            )
 
     _emit(state, [summary.as_dict() for summary in summaries], render)
 

@@ -45,6 +45,10 @@ def offline_scan(monkeypatch: pytest.MonkeyPatch) -> None:
         kwargs["transport"] = httpx.MockTransport(
             lambda request: httpx.Response(200, content=LISTING)
         )
+        # The shipped configuration throttles crt.sh to one request every two
+        # seconds, which is right in production and pointless against a
+        # recorded response.
+        kwargs["config"].sources.crtsh.rate_limit_rps = 0
         return await original(**kwargs)
 
     monkeypatch.setattr(cli, "run_scan", patched)
@@ -159,3 +163,52 @@ def test_duration_shorthand(text: str, seconds: int) -> None:
 def test_invalid_duration_is_rejected(text: str) -> None:
     with pytest.raises(ValueError):
         parse_duration(text)
+
+
+def test_permutations_command_lists_candidates(workspace: Path) -> None:
+    invoke("--json", "init")
+    data = payload(invoke("--json", "permutations", "lemonde.fr", "--limit", "40"))
+    assert len(data) == 40
+    assert all(entry["base"] == "lemonde.fr" for entry in data)
+    assert all(entry["detail"] for entry in data)
+
+
+def test_permutations_uses_the_watchlist_keywords(workspace: Path) -> None:
+    invoke("--json", "init")
+    data = payload(invoke("--json", "permutations", "lemonde.fr"))
+    produced = {entry["name"] for entry in data}
+    assert "lemonde-actu.info" in produced
+
+
+def test_permutations_can_drop_homoglyphs(workspace: Path) -> None:
+    invoke("--json", "init")
+    data = payload(invoke("--json", "permutations", "lemonde.fr", "--no-homoglyphs"))
+    assert not any(entry["kind"] == "homoglyph" for entry in data)
+
+
+def test_permutations_can_select_a_technique(workspace: Path) -> None:
+    invoke("--json", "init")
+    data = payload(invoke("--json", "permutations", "lemonde.fr", "--kind", "omission"))
+    assert {entry["kind"] for entry in data} == {"omission"}
+
+
+def test_permutations_rejects_an_unknown_technique(workspace: Path) -> None:
+    invoke("--json", "init")
+    result = invoke("--json", "permutations", "lemonde.fr", "--kind", "telepathy")
+    assert result.exit_code == 1
+    assert "unknown technique" in payload(result)["error"]
+
+
+def test_permutations_reports_the_readable_form_of_an_idn(workspace: Path) -> None:
+    invoke("--json", "init")
+    data = payload(invoke("--json", "permutations", "lemonde.fr"))
+    idn = [entry for entry in data if entry["name"] == "xn--lemnde-yqf.fr"]
+    assert idn and idn[0]["idn"] is True
+    assert idn[0]["display_name"] == "lemоnde.fr"
+
+
+def test_scan_can_look_up_generated_variants(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    data = payload(invoke("--json", "scan", "--target", "lemonde.fr", "--variants", "5"))
+    assert data[0]["variants_queried"] == 5
+    assert data[0]["queries"] == 6
