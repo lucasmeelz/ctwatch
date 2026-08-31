@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The default watchlist covers about seventy organisations — French press and
+  broadcast, government and tax portals, defence and cyber-security bodies,
+  European and international institutions, and foreign outlets cloned by the
+  same operations — instead of six.
+- Subdomains of a watched domain are no longer recorded as findings. They are
+  the brand's own site, and they buried real findings under a list of the
+  newsroom's own pages.
+- `scan` says what a run is about to cost before making a number of requests a
+  free API quota will not absorb.
+
 - The error raised when no configuration is found now says where ctwatch
   looked and that its state is per-directory. Telling someone to run `init`
   is unhelpful when they have already run it somewhere else.

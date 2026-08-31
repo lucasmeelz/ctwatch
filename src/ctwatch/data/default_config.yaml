@@ -1,47 +1,261 @@
 # ctwatch configuration.
 #
-# The watchlist below is a starting point built from organisations whose
-# impersonation has already been documented publicly. Replace it with your own.
+# The watchlist below is a starting point, not a recommendation: it covers
+# organisations whose impersonation is already public record, so that a new
+# installation does something useful before anyone has typed a domain name.
+# Cut it down to what you actually care about. Every target costs one request
+# per scan, and generating candidates for seventy of them will exhaust a free
+# API quota long before the scan finishes.
+#
+# The practical shape of it:
+#   - a handful of targets you follow closely  -> `ctwatch scan --variants 200`
+#   - a long list you want covered broadly     -> `ctwatch monitor`, which
+#     checks every certificate that goes past against the whole list for free.
 #
 # `allowlist` is not optional in practice: large newsrooms register dozens of
-# defensive lookalike domains themselves. Without it, the tool drowns you in
-# findings that turn out to belong to the brand you are protecting.
+# defensive lookalike domains themselves. Subdomains of a watched domain are
+# never reported — they are the brand's own site — but a separate registration
+# the brand owns has to be declared here or recognised through a shared
+# certificate.
 
 targets:
+  # --- National press ------------------------------------------------------
   - brand: "Le Monde"
     canonical_domains: ["lemonde.fr"]
-    allowlist: []
-    keywords: ["actu", "info", "news", "live", "fr"]
-
+    keywords: &press ["actu", "actualite", "info", "news", "live", "direct", "journal", "fr"]
   - brand: "Le Figaro"
     canonical_domains: ["lefigaro.fr"]
-    allowlist: []
-    keywords: ["actu", "info", "news", "live", "fr"]
-
+    keywords: *press
   - brand: "Libération"
     canonical_domains: ["liberation.fr"]
-    allowlist: []
-    keywords: ["actu", "info", "news", "live", "fr"]
+    keywords: *press
+  - brand: "Les Échos"
+    canonical_domains: ["lesechos.fr"]
+    keywords: *press
+  - brand: "Le Parisien"
+    canonical_domains: ["leparisien.fr"]
+    keywords: *press
+  - brand: "Mediapart"
+    canonical_domains: ["mediapart.fr"]
+    keywords: *press
+  - brand: "L'Express"
+    canonical_domains: ["lexpress.fr"]
+    keywords: *press
+  - brand: "Le Nouvel Obs"
+    canonical_domains: ["nouvelobs.com"]
+    keywords: *press
+  - brand: "Marianne"
+    canonical_domains: ["marianne.net"]
+    keywords: *press
+  - brand: "L'Humanité"
+    canonical_domains: ["humanite.fr"]
+    keywords: *press
+  - brand: "La Croix"
+    canonical_domains: ["la-croix.com"]
+    keywords: *press
+  - brand: "La Tribune"
+    canonical_domains: ["latribune.fr"]
+    keywords: *press
+  - brand: "Ouest-France"
+    canonical_domains: ["ouest-france.fr"]
+    keywords: *press
+  - brand: "Sud Ouest"
+    canonical_domains: ["sudouest.fr"]
+    keywords: *press
+  - brand: "20 Minutes"
+    canonical_domains: ["20minutes.fr"]
+    keywords: *press
+  - brand: "Courrier International"
+    canonical_domains: ["courrierinternational.com"]
+    keywords: *press
+  - brand: "AFP"
+    canonical_domains: ["afp.com"]
+    keywords: ["actu", "info", "news", "press", "agence", "depeche"]
 
+  # --- Broadcast -----------------------------------------------------------
   - brand: "France Info"
     canonical_domains: ["francetvinfo.fr"]
-    allowlist: []
-    keywords: ["actu", "info", "news", "live", "fr"]
+    keywords: &broadcast ["actu", "info", "news", "live", "direct", "replay", "tv"]
+  - brand: "France 24"
+    canonical_domains: ["france24.com"]
+    keywords: *broadcast
+  - brand: "RFI"
+    canonical_domains: ["rfi.fr"]
+    keywords: *broadcast
+  - brand: "Radio France"
+    canonical_domains: ["radiofrance.fr"]
+    keywords: *broadcast
+  - brand: "BFMTV"
+    canonical_domains: ["bfmtv.com"]
+    keywords: *broadcast
+  - brand: "LCI"
+    canonical_domains: ["lci.fr"]
+    keywords: *broadcast
+  - brand: "TF1 Info"
+    canonical_domains: ["tf1info.fr"]
+    keywords: *broadcast
+  - brand: "Europe 1"
+    canonical_domains: ["europe1.fr"]
+    keywords: *broadcast
+  - brand: "Arte"
+    canonical_domains: ["arte.tv"]
+    keywords: *broadcast
+  - brand: "Public Sénat"
+    canonical_domains: ["publicsenat.fr"]
+    keywords: *broadcast
 
+  # --- Institutions --------------------------------------------------------
+  # These are the ones impersonated for fraud as often as for influence: a
+  # convincing copy of a tax or health portal collects credentials at scale.
   - brand: "Gouvernement"
     canonical_domains: ["gouvernement.fr"]
-    allowlist: []
-    keywords: ["gouv", "officiel", "info", "fr"]
-
+    keywords: &state ["gouv", "officiel", "service", "demarches", "portail", "france", "aide"]
+  - brand: "Élysée"
+    canonical_domains: ["elysee.fr"]
+    keywords: *state
   - brand: "Service Public"
     canonical_domains: ["service-public.fr"]
-    allowlist: []
-    keywords: ["gouv", "officiel", "demarches", "fr"]
+    keywords: *state
+  - brand: "Légifrance"
+    canonical_domains: ["legifrance.gouv.fr"]
+    keywords: *state
+  - brand: "Impôts"
+    canonical_domains: ["impots.gouv.fr"]
+    keywords: &money ["gouv", "officiel", "impot", "remboursement", "paiement", "declaration"]
+  - brand: "Ameli"
+    canonical_domains: ["ameli.fr"]
+    keywords: *money
+  - brand: "URSSAF"
+    canonical_domains: ["urssaf.fr"]
+    keywords: *money
+  - brand: "France Travail"
+    canonical_domains: ["francetravail.fr"]
+    keywords: *money
+  - brand: "FranceConnect"
+    canonical_domains: ["franceconnect.gouv.fr"]
+    keywords: &identity ["gouv", "officiel", "connect", "identite", "auth", "login"]
+  - brand: "Ministère de l'Intérieur"
+    canonical_domains: ["interieur.gouv.fr"]
+    keywords: *state
+  - brand: "Ministère de l'Économie"
+    canonical_domains: ["economie.gouv.fr"]
+    keywords: *state
+  - brand: "Ministère des Affaires étrangères"
+    canonical_domains: ["diplomatie.gouv.fr"]
+    keywords: *state
+  - brand: "Ministère de l'Éducation"
+    canonical_domains: ["education.gouv.fr"]
+    keywords: *state
+  - brand: "Ministère de la Santé"
+    canonical_domains: ["sante.gouv.fr"]
+    keywords: *state
+  - brand: "Sénat"
+    canonical_domains: ["senat.fr"]
+    keywords: *state
+  - brand: "Assemblée nationale"
+    canonical_domains: ["assemblee-nationale.fr"]
+    keywords: *state
+  - brand: "data.gouv.fr"
+    canonical_domains: ["data.gouv.fr"]
+    keywords: *state
+
+  # --- Defence and cyber ---------------------------------------------------
+  - brand: "Ministère des Armées"
+    canonical_domains: ["defense.gouv.fr"]
+    keywords: &defence ["gouv", "officiel", "defense", "armee", "militaire", "recrutement"]
+  - brand: "SGDSN"
+    canonical_domains: ["sgdsn.gouv.fr"]
+    keywords: *defence
+  - brand: "ANSSI"
+    canonical_domains: ["cyber.gouv.fr"]
+    keywords: &cyber ["gouv", "officiel", "cyber", "securite", "alerte", "signalement"]
+  - brand: "ANSSI (ssi.gouv.fr)"
+    canonical_domains: ["ssi.gouv.fr"]
+    keywords: *cyber
+  - brand: "Cybermalveillance"
+    canonical_domains: ["cybermalveillance.gouv.fr"]
+    keywords: *cyber
+  - brand: "OTAN"
+    canonical_domains: ["nato.int"]
+    keywords: ["official", "news", "press", "info", "summit"]
+
+  # --- International organisations -----------------------------------------
+  - brand: "Union européenne"
+    canonical_domains: ["europa.eu"]
+    keywords: &intl ["official", "officiel", "news", "press", "info", "eu"]
+  - brand: "Nations unies"
+    canonical_domains: ["un.org"]
+    keywords: *intl
+  - brand: "OMS"
+    canonical_domains: ["who.int"]
+    keywords: *intl
+  - brand: "Conseil de l'Europe"
+    canonical_domains: ["coe.int"]
+    keywords: *intl
+  - brand: "OCDE"
+    canonical_domains: ["oecd.org"]
+    keywords: *intl
+  - brand: "Interpol"
+    canonical_domains: ["interpol.int"]
+    keywords: *intl
+
+  # --- Foreign outlets with documented impersonation ------------------------
+  # Cloned as part of the same coordinated operations that target French
+  # outlets, which makes them useful for spotting shared infrastructure.
+  - brand: "Der Spiegel"
+    canonical_domains: ["spiegel.de"]
+    keywords: &german ["aktuell", "nachrichten", "news", "live", "de"]
+  - brand: "Bild"
+    canonical_domains: ["bild.de"]
+    keywords: *german
+  - brand: "Die Welt"
+    canonical_domains: ["welt.de"]
+    keywords: *german
+  - brand: "FAZ"
+    canonical_domains: ["faz.net"]
+    keywords: *german
+  - brand: "Süddeutsche Zeitung"
+    canonical_domains: ["sueddeutsche.de"]
+    keywords: *german
+  - brand: "T-Online"
+    canonical_domains: ["t-online.de"]
+    keywords: *german
+  - brand: "The Guardian"
+    canonical_domains: ["theguardian.com"]
+    keywords: &english ["news", "live", "info", "daily", "uk"]
+  - brand: "BBC"
+    canonical_domains: ["bbc.co.uk"]
+    keywords: *english
+  - brand: "ANSA"
+    canonical_domains: ["ansa.it"]
+    keywords: &italian ["notizie", "news", "live", "info", "it"]
+  - brand: "La Repubblica"
+    canonical_domains: ["repubblica.it"]
+    keywords: *italian
+  - brand: "Corriere della Sera"
+    canonical_domains: ["corriere.it"]
+    keywords: *italian
+  - brand: "Ukrainska Pravda"
+    canonical_domains: ["pravda.com.ua"]
+    keywords: &ukrainian ["news", "novyny", "live", "info", "ua"]
+  - brand: "RBC Ukraine"
+    canonical_domains: ["rbc.ua"]
+    keywords: *ukrainian
+  - brand: "Fakt"
+    canonical_domains: ["fakt.pl"]
+    keywords: &polish ["wiadomosci", "news", "live", "info", "pl"]
+  - brand: "Rzeczpospolita"
+    canonical_domains: ["rp.pl"]
+    keywords: *polish
+  - brand: "Wprost"
+    canonical_domains: ["wprost.pl"]
+    keywords: *polish
 
 scoring:
   tld_risk:
-    high: ["top", "xyz", "icu", "sbs", "cfd", "info", "shop", "click", "live"]
-    medium: ["net", "org", "co", "online", "site"]
+    high: ["top", "xyz", "icu", "sbs", "cfd", "info", "click", "link", "live", "shop",
+           "online", "site", "news", "press"]
+    medium: ["net", "org", "co", "io", "me", "biz"]
   weights:
     levenshtein: 0.3
     homoglyph: 0.25
@@ -70,6 +284,8 @@ sources:
     timeout_seconds: 45.0
 
   certstream:
+    # The public server is unreliable and has been known to accept connections
+    # and then send nothing. Point this at your own for unattended use.
     enabled: false
     url: "wss://certstream.calidog.io/"
     fallback_to_polling: true

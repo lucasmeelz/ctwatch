@@ -417,6 +417,9 @@ def permutations(
 
 REVIEW_STATUSES: tuple[str, ...] = ("reviewing", "confirmed", "dismissed", "new")
 
+# Past this, a scan is no longer something a free API quota will absorb.
+LARGE_SCAN_QUERIES = 25
+
 
 @app.command()
 def review(
@@ -1041,6 +1044,18 @@ def scan(
         if not selected:
             _fail("the watchlist is empty; run `ctwatch init` first", state=state)
             return
+
+        planned_queries = len(selected) * (1 + max(0, variants))
+        if not state.json_output and planned_queries > LARGE_SCAN_QUERIES:
+            error_console.print(
+                f"[yellow]about to make {planned_queries} request(s) across "
+                f"{len(selected)} target(s)[/yellow]"
+            )
+            error_console.print(
+                "[dim]free API quotas will not cover that. Narrow it with --target, "
+                "or use `ctwatch monitor`, which checks every certificate that goes "
+                "past against the whole watchlist at no per-name cost.[/dim]\n"
+            )
 
         evidence = EvidenceStore(config.storage.evidence_dir, repository)
         try:

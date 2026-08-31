@@ -78,12 +78,16 @@ criteria, each with the sentence that justifies it:
 A criterion that scored nothing stays in the table: an absent signal is
 information, not an omission.
 
-**Suppresses the brand's own domains.** Newsrooms register lookalike domains
-themselves, defensively, by the dozen. On the first real scan of `lemonde.fr`,
-87 domains were observed and 87 were suppressed — subdomains, and domains
-appearing on the same certificate as the watched name, which settles ownership
-without anyone having to declare anything. Suppressed findings are kept and can
-be inspected with `--all`: a suppression nobody can inspect is a suppression
+**Suppresses the brand's own domains.** The watched domain and everything under
+it are the brand's own site, and are never reported — the first real scan of
+`lemonde.fr` turned up 87 of them, from `blog.lemonde.fr` to
+`salon-artistique.lemonde.fr`, and a genuine finding would have been buried
+among them. Beyond that, newsrooms register lookalike domains themselves,
+defensively, by the dozen; those are recognised either from the `allowlist` in
+the configuration or from appearing on the same certificate as the watched
+name, which settles ownership without anyone having to declare anything. Unlike
+subdomains, those suppressions are judgements, so they are kept and can be
+inspected with `--all`: a suppression nobody can inspect is a suppression
 nobody can trust.
 
 **Rates confidence separately from suspicion.** An Admiralty-style code keeps
@@ -175,6 +179,28 @@ For sustained use, two things are worth doing:
 
 Neither is required to use the tool. Both are the difference between a scan
 that finishes and a scan that gives up.
+
+## The watchlist
+
+`ctwatch init` ships a starting watchlist of about seventy organisations whose
+impersonation is already public record: French national press and broadcast,
+the news agency, government portals — including the tax, health and identity
+services that are copied for fraud as often as for influence — defence and
+cyber-security bodies, European and international institutions, and the foreign
+outlets cloned by the same operations that target French ones.
+
+It is a starting point, not a recommendation. Cut it down to what you actually
+care about, because the two ways of using it cost very different things:
+
+- **A few targets you follow closely.** `ctwatch scan --target lemonde.fr
+  --variants 200` looks up two hundred candidate names, which is two hundred
+  requests. Scan warns you before making a number of requests a free quota will
+  not absorb.
+- **A long list you want covered broadly.** `ctwatch monitor` checks every
+  certificate that goes past against the entire watchlist in one lookup —
+  roughly 34,000 candidate names across seventy brands, matched in about
+  thirteen microseconds each. Coverage costs nothing per name here, which is
+  the whole reason the live feed exists.
 
 ## Configuration
 

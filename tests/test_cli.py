@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -31,6 +32,16 @@ def invoke(*args: str) -> Any:
     if result.exception is not None and not isinstance(result.exception, SystemExit):
         raise result.exception
     return result
+
+
+def everything(result: Any) -> str:
+    """Stdout and stderr together; notices go to stderr."""
+
+    parts = [result.stdout]
+    with contextlib.suppress(ValueError):  # depends on the click version
+        parts.append(result.stderr)
+    # Rich wraps to the terminal width, so collapse whitespace before matching.
+    return " ".join(" ".join(part for part in parts if part).split())
 
 
 def payload(result: Any) -> Any:
@@ -382,3 +393,19 @@ def test_dashboard_is_written_as_one_file(workspace: Path, offline_scan: None) -
     assert document.startswith("<!DOCTYPE html>")
     assert "lemonde-actu.info" in document
     assert data["url"].startswith("file://")
+
+
+def test_a_large_scan_says_what_it_is_about_to_cost(workspace: Path, offline_scan: None) -> None:
+    """The shipped watchlist has seventy targets; scanning it all is not free."""
+
+    invoke("--json", "init")
+    result = invoke("scan", "--target", "lemonde.fr", "--variants", "40")
+    assert result.exit_code == 0
+    assert "about to make 41 request(s)" in everything(result)
+    assert "no per-name cost" in everything(result)
+
+
+def test_a_small_scan_says_nothing_of_the_sort(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    result = invoke("scan", "--target", "lemonde.fr")
+    assert "about to make" not in everything(result)
