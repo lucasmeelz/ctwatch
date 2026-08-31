@@ -183,8 +183,15 @@ class CertStreamConfig(StrictModel):
     reconnect_delay_seconds: float = 5.0
     max_reconnect_delay_seconds: float = 300.0
     max_consecutive_failures: int = 5
+    # A connected feed that goes quiet is a dead feed. The public server does
+    # exactly this: it accepts the connection and then sends nothing.
+    idle_timeout_seconds: float = 60.0
     fallback_to_polling: bool = True
     polling_interval_seconds: float = 900.0
+    # A polling round has to be bounded. A source that is down still consumes
+    # its whole timeout budget on every query, and a monitor sitting inside
+    # that is a monitor doing nothing, silently.
+    polling_timeout_seconds: float = 120.0
 
 
 class SourcesConfig(StrictModel):

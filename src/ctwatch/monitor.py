@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -58,6 +59,7 @@ class MonitorReport:
     archived: int = 0
     disconnections: int = 0
     polling_rounds: int = 0
+    polling_timeouts: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -69,6 +71,7 @@ class MonitorReport:
             "archived": self.archived,
             "disconnections": self.disconnections,
             "polling_rounds": self.polling_rounds,
+            "polling_timeouts": self.polling_timeouts,
             "errors": list(self.errors),
         }
 
@@ -212,10 +215,17 @@ async def run_monitor(
     connect: ConnectLike | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     notifiers: list[Notifier] | None = None,
+    on_event: Callable[[str], None] | None = None,
 ) -> MonitorReport:
-    """Follow the feed until it ends, or until the certificate budget is spent."""
+    """Follow the feed until it ends, or until the certificate budget is spent.
+
+    ``on_event`` receives operational notices — losing the feed, falling back
+    to polling — as they happen. A monitor that reports those only when it
+    exits is indistinguishable from one that has hung.
+    """
 
     report = MonitorReport()
+    announce = on_event or (lambda _message: None)
     matcher = VariantMatcher.build(targets, variants=variants)
 
     http = PassiveHttpClient(
@@ -232,7 +242,10 @@ async def run_monitor(
         reconnect_delay=stream_config.reconnect_delay_seconds,
         max_reconnect_delay=stream_config.max_reconnect_delay_seconds,
         max_consecutive_failures=stream_config.max_consecutive_failures,
-        on_disconnect=lambda failures, reason: _record_disconnect(report, failures, reason),
+        idle_timeout=stream_config.idle_timeout_seconds,
+        on_disconnect=lambda failures, reason: _record_disconnect(
+            report, failures, reason, announce
+        ),
     )
 
     try:
@@ -253,6 +266,7 @@ async def run_monitor(
             report.errors.append(str(exc))
             if not stream_config.fallback_to_polling:
                 raise
+            announce("the live feed is unavailable; falling back to polling")
             await _poll_once(
                 config=config,
                 repository=repository,
@@ -260,6 +274,7 @@ async def run_monitor(
                 targets=targets,
                 report=report,
                 transport=transport,
+                announce=announce,
             )
     finally:
         for notifier in active:
@@ -270,11 +285,17 @@ async def run_monitor(
     return report
 
 
-def _record_disconnect(report: MonitorReport, failures: int, reason: str) -> None:
+def _record_disconnect(
+    report: MonitorReport,
+    failures: int,
+    reason: str,
+    announce: Callable[[str], None],
+) -> None:
     report.disconnections += 1
     message = f"feed disconnected ({failures}): {reason}"
     if message not in report.errors:
         report.errors.append(message)
+    announce(message)
 
 
 async def _poll_once(
@@ -285,21 +306,39 @@ async def _poll_once(
     targets: list[WatchTarget],
     report: MonitorReport,
     transport: httpx.AsyncBaseTransport | None,
+    announce: Callable[[str], None] | None = None,
 ) -> None:
     """Fall back to asking the ordinary sources.
 
     Polling covers far less ground than the feed — it sees the watched names
     rather than every certificate issued — but it is the difference between a
     degraded monitor and a silent one.
+
+    The round is bounded. A source that is down consumes its entire timeout
+    budget on every single query, and without a deadline a monitor spends
+    minutes inside a dead service instead of going back to the feed.
     """
 
-    summaries = await run_scan(
-        config=config,
-        repository=repository,
-        evidence=evidence,
-        targets=targets,
-        transport=transport,
-    )
+    say = announce or (lambda _message: None)
+    deadline = config.sources.certstream.polling_timeout_seconds
+
+    try:
+        async with asyncio.timeout(deadline if deadline > 0 else None):
+            summaries = await run_scan(
+                config=config,
+                repository=repository,
+                evidence=evidence,
+                targets=targets,
+                transport=transport,
+            )
+    except TimeoutError:
+        report.polling_timeouts += 1
+        message = f"the polling round did not finish within {deadline:g}s"
+        if message not in report.errors:
+            report.errors.append(message)
+        say(message)
+        return
+
     report.polling_rounds += 1
     for summary in summaries:
         for message in summary.errors:
@@ -308,6 +347,8 @@ async def _poll_once(
 
     for target in targets:
         assess_target(repository=repository, config=config, target=target)
+
+    say(f"polled {len(targets)} target(s)")
 
 
 async def poll_forever(

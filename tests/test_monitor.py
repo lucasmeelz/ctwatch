@@ -8,6 +8,7 @@ degrade to polling rather than sit quietly on a dead socket.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -73,16 +74,40 @@ class FakeSocket:
         return generator()
 
 
-class FakeConnection:
-    """One connection attempt: either a set of messages, or a failure."""
+class SilentSocket:
+    """A socket that stays open and never sends anything.
 
-    def __init__(self, messages: list[str] | None = None, error: Exception | None = None) -> None:
+    Exactly what the public CertStream server does when it is unwell, which is
+    the failure a naive client never notices.
+    """
+
+    def __aiter__(self) -> AsyncIterator[str]:
+        async def generator() -> AsyncIterator[str]:
+            await asyncio.sleep(3600)
+            yield ""  # pragma: no cover - never reached
+
+        return generator()
+
+
+class FakeConnection:
+    """One connection attempt: messages, a failure, or an open but silent feed."""
+
+    def __init__(
+        self,
+        messages: list[str] | None = None,
+        error: Exception | None = None,
+        *,
+        silent: bool = False,
+    ) -> None:
         self._messages = messages or []
         self._error = error
+        self._silent = silent
 
-    async def __aenter__(self) -> FakeSocket:
+    async def __aenter__(self) -> FakeSocket | SilentSocket:
         if self._error is not None:
             raise self._error
+        if self._silent:
+            return SilentSocket()
         return FakeSocket(self._messages)
 
     async def __aexit__(self, *args: object) -> None:
@@ -224,6 +249,49 @@ async def test_a_reconnection_resets_the_failure_count() -> None:
         async for certificate in client.stream():
             seen.extend(certificate.names)
     assert seen == ["lemonde-actu.info", "lemonde-live.info"]
+
+
+async def test_a_connected_but_silent_feed_counts_as_a_disconnect() -> None:
+    """The public server's actual failure mode: it accepts, then says nothing.
+
+    There is no error and no close, so a client that only reconnects on failure
+    sits on a dead socket forever, looking healthy while seeing nothing.
+    """
+
+    disconnects: list[str] = []
+    client = CertStreamClient(
+        url="wss://example.invalid/",
+        connect=feed(FakeConnection(silent=True), FakeConnection(silent=True)),
+        reconnect_delay=0.0,
+        max_consecutive_failures=2,
+        idle_timeout=0.05,
+        on_disconnect=lambda failures, reason: disconnects.append(reason),
+    )
+    with pytest.raises(StreamUnavailableError):
+        async for _ in client.stream():
+            pass
+
+    assert len(disconnects) == 2
+    assert all("nothing received" in reason for reason in disconnects)
+
+
+async def test_a_silent_feed_falls_back_to_polling(
+    config: Config, repository: Repository, store: EvidenceStore, target: WatchTarget
+) -> None:
+    config.sources.certstream.idle_timeout_seconds = 0.05
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=CRTSH_LISTING))
+    report = await run_monitor(
+        config=config,
+        repository=repository,
+        evidence=store,
+        targets=[target],
+        connect=feed(FakeConnection(silent=True), FakeConnection(silent=True)),
+        transport=transport,
+        notifiers=[Recorder()],
+    )
+
+    assert report.disconnections == 2
+    assert report.polling_rounds == 1
 
 
 # ----------------------------------------------------------------------------
@@ -475,3 +543,55 @@ def test_an_enabled_webhook_host_joins_the_allowlist() -> None:
 
 def test_the_report_is_serialisable() -> None:
     assert MonitorReport(certificates_seen=3).as_dict()["certificates_seen"] == 3
+
+
+async def test_a_polling_round_is_bounded(
+    config: Config, repository: Repository, store: EvidenceStore, target: WatchTarget
+) -> None:
+    """A dead source must not hold a monitor inside its timeout budget."""
+
+    config.sources.certstream.polling_timeout_seconds = 0.05
+
+    async def never_answers(request: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(30)
+        return httpx.Response(200, content=CRTSH_LISTING)  # pragma: no cover
+
+    report = await run_monitor(
+        config=config,
+        repository=repository,
+        evidence=store,
+        targets=[target],
+        connect=feed(FakeConnection(error=ConnectionResetError("down"))),
+        transport=httpx.MockTransport(never_answers),
+        notifiers=[Recorder()],
+    )
+
+    assert report.polling_timeouts == 1
+    assert report.polling_rounds == 0
+    assert any("did not finish within" in message for message in report.errors)
+
+
+async def test_operational_notices_are_reported_as_they_happen(
+    config: Config, repository: Repository, store: EvidenceStore, target: WatchTarget
+) -> None:
+    """A monitor that reports trouble only on exit looks like one that hung."""
+
+    events: list[str] = []
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, content=CRTSH_LISTING))
+    await run_monitor(
+        config=config,
+        repository=repository,
+        evidence=store,
+        targets=[target],
+        connect=feed(
+            FakeConnection(error=ConnectionResetError("down")),
+            FakeConnection(error=ConnectionResetError("still down")),
+        ),
+        transport=transport,
+        notifiers=[Recorder()],
+        on_event=events.append,
+    )
+
+    assert any("feed disconnected" in event for event in events)
+    assert any("falling back to polling" in event for event in events)
+    assert any("polled 1 target" in event for event in events)

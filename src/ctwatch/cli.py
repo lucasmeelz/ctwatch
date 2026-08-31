@@ -452,6 +452,10 @@ def monitor(
             )
             console.print("[dim]press Ctrl-C to stop[/dim]\n")
 
+        def announce(message: str) -> None:
+            if not state.json_output:
+                error_console.print(f"[dim]{message}[/dim]")
+
         try:
             report = asyncio.run(
                 run_monitor(
@@ -461,6 +465,7 @@ def monitor(
                     targets=selected,
                     variants=variants,
                     max_certificates=max_certificates,
+                    on_event=announce,
                 )
             )
         except KeyboardInterrupt:

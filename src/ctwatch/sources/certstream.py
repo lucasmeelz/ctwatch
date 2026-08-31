@@ -29,6 +29,17 @@ from ctwatch.timeutil import parse_iso, utc_now
 DEFAULT_URL = "wss://certstream.calidog.io/"
 
 
+class FeedIdleError(RuntimeError):
+    """Raised when a connected feed stops sending anything.
+
+    The failure mode that matters most in practice: the public CertStream
+    server accepts a connection and then sends nothing at all. There is no
+    error and no close, so a client that only reconnects on failure will sit on
+    a dead socket indefinitely, looking healthy while seeing nothing. Silence
+    has to be treated as a disconnect.
+    """
+
+
 class StreamUnavailableError(RuntimeError):
     """Raised when the feed could not be kept open."""
 
@@ -144,6 +155,7 @@ class CertStreamClient:
         reconnect_delay: float = 5.0,
         max_reconnect_delay: float = 300.0,
         max_consecutive_failures: int = 5,
+        idle_timeout: float = 60.0,
         on_disconnect: Callable[[int, str], None] | None = None,
     ) -> None:
         self._url = url
@@ -151,6 +163,7 @@ class CertStreamClient:
         self._reconnect_delay = max(0.0, reconnect_delay)
         self._max_reconnect_delay = max(self._reconnect_delay, max_reconnect_delay)
         self._max_failures = max(1, max_consecutive_failures)
+        self._idle_timeout = idle_timeout if idle_timeout > 0 else None
         self._on_disconnect = on_disconnect
 
     def _connector(self) -> ConnectLike:
@@ -164,6 +177,17 @@ class CertStreamClient:
         ceiling = min(self._reconnect_delay * (2 ** (failures - 1)), self._max_reconnect_delay)
         return random.uniform(0.0, ceiling) if ceiling > 0 else 0.0
 
+    async def _next_message(self, messages: AsyncIterator[str | bytes]) -> str | bytes:
+        """Read the next message, treating a long silence as a disconnect."""
+
+        if self._idle_timeout is None:
+            return await messages.__anext__()
+        try:
+            return await asyncio.wait_for(messages.__anext__(), self._idle_timeout)
+        except TimeoutError as exc:
+            msg = f"nothing received for {self._idle_timeout:g}s"
+            raise FeedIdleError(msg) from exc
+
     async def stream(self) -> AsyncIterator[StreamedCertificate]:
         """Yield certificates until the feed stays down past its budget."""
 
@@ -173,8 +197,19 @@ class CertStreamClient:
         while failures < self._max_failures:
             try:
                 async with connect(self._url) as socket:
-                    failures = 0
-                    async for payload in socket:
+                    messages = socket.__aiter__()
+                    while True:
+                        try:
+                            payload = await self._next_message(messages)
+                        except StopAsyncIteration:
+                            break
+
+                        # The budget is cleared by receiving something, not by
+                        # connecting. A server that accepts every connection and
+                        # then says nothing would otherwise reset the counter
+                        # forever and never be recognised as down.
+                        failures = 0
+
                         certificate = parse_message(payload)
                         if certificate is not None:
                             yield certificate
