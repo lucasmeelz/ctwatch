@@ -184,9 +184,7 @@ def test_every_criterion_is_reported_even_when_it_contributes_nothing(
         assert contribution.explanation
 
 
-def test_a_disguised_name_outscores_an_unrelated_one(
-    scorer: Scorer, target: WatchTarget
-) -> None:
+def test_a_disguised_name_outscores_an_unrelated_one(scorer: Scorer, target: WatchTarget) -> None:
     disguised = score(scorer, target, "xn--lemnde-yqf.fr")
     unrelated = score(scorer, target, "boulangerie-durand.fr")
     assert disguised.value > unrelated.value  # type: ignore[attr-defined]
