@@ -299,3 +299,61 @@ async def test_repeated_failures_are_summarised_not_repeated(
 
     assert summaries[0].failed_queries == 32
     assert len(summaries[0].errors) <= 5
+
+
+async def test_a_rate_limited_source_is_asked_only_once(
+    two_source_config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    """A free tier saying "you have exceeded the limit" has answered fully.
+
+    Asking it five hundred more times is useless and a poor way to treat a
+    service that costs nothing to use.
+    """
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        if request.url.host == "api.certspotter.com":
+            return httpx.Response(429, content=b'{"code": "rate_limited"}')
+        return httpx.Response(200, content=LISTING)
+
+    target = repository.upsert_target(brand="Le Monde", canonical_domain="lemonde.fr")
+    summaries = await run_scan(
+        config=two_source_config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        variants=20,
+        transport=httpx.MockTransport(handler),
+    )
+
+    # One attempt against Cert Spotter, then it is left alone for the run.
+    assert calls.count("api.certspotter.com") == 1
+    assert calls.count("crt.sh") == 21
+    assert any("rate limiting us" in message for message in summaries[0].errors)
+
+
+async def test_an_ordinary_failure_does_not_disable_a_source(
+    two_source_config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    """A gateway error is a bad moment, not a refusal."""
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.host)
+        if request.url.host == "api.certspotter.com":
+            return httpx.Response(502, content=b"bad gateway")
+        return httpx.Response(200, content=LISTING)
+
+    target = repository.upsert_target(brand="Le Monde", canonical_domain="lemonde.fr")
+    await run_scan(
+        config=two_source_config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        variants=5,
+        transport=httpx.MockTransport(handler),
+    )
+    assert calls.count("api.certspotter.com") == 6

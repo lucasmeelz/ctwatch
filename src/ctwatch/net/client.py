@@ -26,7 +26,8 @@ import httpx
 
 from ctwatch.timeutil import utc_now
 
-RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+TOO_MANY_REQUESTS = 429
+RETRYABLE_STATUS = frozenset({408, 425, TOO_MANY_REQUESTS, 500, 502, 503, 504})
 MAX_BACKOFF_SECONDS = 60.0
 
 
@@ -162,10 +163,19 @@ class FetchResult:
 class UpstreamError(RuntimeError):
     """Raised when a service could not be reached within the retry budget."""
 
-    def __init__(self, message: str, *, url: str, attempts: int) -> None:
+    def __init__(
+        self, message: str, *, url: str, attempts: int, last_status: int | None = None
+    ) -> None:
         super().__init__(message)
         self.url = url
         self.attempts = attempts
+        self.last_status = last_status
+
+    @property
+    def is_rate_limited(self) -> bool:
+        """Whether the service was telling us to stop, rather than failing."""
+
+        return self.last_status == TOO_MANY_REQUESTS
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
@@ -243,6 +253,7 @@ class PassiveHttpClient:
         """Send one request, retrying transient failures with jittered backoff."""
 
         last_error: str = "no attempt was made"
+        last_status: int | None = None
         for attempt in range(1, self._max_attempts + 1):
             await self._limiter.wait()
             requested_at = utc_now()
@@ -265,6 +276,7 @@ class PassiveHttpClient:
                         headers=dict(response.headers),
                     )
                 last_error = f"HTTP {response.status_code}"
+                last_status = response.status_code
                 hinted = _retry_after_seconds(response)
                 if attempt < self._max_attempts:
                     await asyncio.sleep(self._backoff(attempt, hinted))
@@ -274,7 +286,7 @@ class PassiveHttpClient:
                 await asyncio.sleep(self._backoff(attempt, None))
 
         msg = f"giving up on {url} after {self._max_attempts} attempts ({last_error})"
-        raise UpstreamError(msg, url=url, attempts=self._max_attempts)
+        raise UpstreamError(msg, url=url, attempts=self._max_attempts, last_status=last_status)
 
     async def get(
         self,

@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 from ctwatch.names import DomainName
-from ctwatch.net.client import PassiveHttpClient
+from ctwatch.net.client import PassiveHttpClient, UpstreamError
 from ctwatch.store.evidence import EvidenceStore
 from ctwatch.store.models import EvidenceRecord
 from ctwatch.store.repository import Repository
@@ -105,6 +105,28 @@ class Source(ABC):
         self._evidence = evidence
         self._repository = repository
         self._cache_ttl = max(0, cache_ttl_seconds)
+        self._unavailable_reason: str | None = None
+
+    @property
+    def available(self) -> bool:
+        """False once the service has told us to stop asking."""
+
+        return self._unavailable_reason is None
+
+    @property
+    def unavailable_reason(self) -> str | None:
+        return self._unavailable_reason
+
+    def mark_unavailable(self, reason: str) -> None:
+        """Stop querying this source for the rest of the run.
+
+        A free tier that answers "you have exceeded the rate limit" has given a
+        complete answer. Retrying it five hundred more times is both useless
+        and a poor way to treat a service that costs nothing to use.
+        """
+
+        if self._unavailable_reason is None:
+            self._unavailable_reason = reason
 
     @abstractmethod
     def search(self, query: SourceQuery) -> AsyncIterator[CertObservation]:
@@ -132,7 +154,15 @@ class Source(ABC):
                     evidence=cached, content=self._evidence.read(cached), from_cache=True
                 )
 
-        result = await self._http.get(url, params=params, headers=headers)
+        try:
+            result = await self._http.get(url, params=params, headers=headers)
+        except UpstreamError as exc:
+            if exc.is_rate_limited:
+                self.mark_unavailable(
+                    f"{self.name} is rate limiting us; not asking it again this run"
+                )
+            raise
+
         if result.status_code >= 400:
             # Services explain themselves in the body far more usefully than in
             # the status line; Cert Spotter in particular says exactly why a

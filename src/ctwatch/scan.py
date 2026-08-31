@@ -201,6 +201,8 @@ async def scan_target(
 
     for query in planned:
         for source in sources:
+            if not source.available:
+                continue
             summary.queries += 1
             try:
                 found = 0
@@ -209,6 +211,8 @@ async def scan_target(
                     found += 1
             except (SourceError, UpstreamError) as exc:
                 summary.record_failure(f"{source.name}: {exc}")
+                if source.unavailable_reason is not None:
+                    summary.record_failure(source.unavailable_reason)
                 continue
 
             summary.by_source[source.name] = summary.by_source.get(source.name, 0) + found
