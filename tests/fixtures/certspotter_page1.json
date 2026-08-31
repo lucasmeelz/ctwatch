@@ -1,0 +1,31 @@
+[
+  {
+    "id": "16504639233",
+    "tbs_sha256": "9f2b1c4d5e6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e",
+    "cert_sha256": "1a927566e4ae1e21426b431d3bcf4cc2b9752a1e53a8d2f3047e974413fea147",
+    "pubkey_sha256": "9cdd46e3a2dd31e192a8744608fb12997fba30a1aa06399163c3d01263386293",
+    "dns_names": ["lemonde-actu.info", "www.lemonde-actu.info"],
+    "issuer": {
+      "friendly_name": "Let's Encrypt",
+      "name": "C=US, O=Let's Encrypt, CN=R11",
+      "pubkey_sha256": "aa11bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899"
+    },
+    "not_before": "2026-03-08T03:12:52Z",
+    "not_after": "2026-06-06T03:12:51Z",
+    "revoked": false
+  },
+  {
+    "id": "16504649787",
+    "tbs_sha256": "0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7",
+    "cert_sha256": "2b038677f5bf2f32537c542e4cd05dd3ca863b2f64b9e3f4158fa85524ffb258",
+    "pubkey_sha256": "9cdd46e3a2dd31e192a8744608fb12997fba30a1aa06399163c3d01263386293",
+    "dns_names": ["*.lemonde-actu.info"],
+    "issuer": {
+      "friendly_name": "Let's Encrypt",
+      "name": "C=US, O=Let's Encrypt, CN=R11"
+    },
+    "not_before": "2026-03-08T03:12:58Z",
+    "not_after": "2026-06-06T03:12:57Z",
+    "revoked": false
+  }
+]

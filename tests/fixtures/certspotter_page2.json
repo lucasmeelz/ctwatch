@@ -1,0 +1,15 @@
+[
+  {
+    "id": "17110044553",
+    "cert_sha256": "3c149788a6c03043648d653f5de16ee4db974c3075caf405269fb96635aac369",
+    "pubkey_sha256": "bb22cc33dd44ee55ff6677889900aabbccddeeff00112233445566778899aabb",
+    "dns_names": ["xn--lemnde-yqf.fr", "www.xn--lemnde-yqf.fr"],
+    "issuer": {
+      "friendly_name": "GlobalSign",
+      "name": "C=BE, O=GlobalSign nv-sa, CN=GlobalSign GCC R3 DV TLS CA 2020"
+    },
+    "not_before": "2026-01-19T21:41:07Z",
+    "not_after": "2027-01-20T21:41:06Z",
+    "revoked": false
+  }
+]

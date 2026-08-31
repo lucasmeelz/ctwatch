@@ -134,7 +134,13 @@ class Source(ABC):
 
         result = await self._http.get(url, params=params, headers=headers)
         if result.status_code >= 400:
+            # Services explain themselves in the body far more usefully than in
+            # the status line; Cert Spotter in particular says exactly why a
+            # query was refused.
+            detail = result.content[:200].decode("utf-8", errors="replace").strip()
             msg = f"{self.name} returned HTTP {result.status_code} for {result.url}"
+            if detail:
+                msg = f"{msg}: {detail}"
             raise SourceError(msg)
 
         record = self._evidence.capture(
