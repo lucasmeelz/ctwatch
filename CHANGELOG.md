@@ -35,6 +35,8 @@ First release.
   candidate set in a single lookup, and a polling fallback when the feed cannot
   be kept open.
 - Console, JSON Lines and webhook notifiers.
+- `ctwatch review`, recording a human verdict on a finding that survives every
+  later rescan and rescore.
 - Reports in Markdown and CSV, a single-file HTML dashboard, and self-contained
   evidence bundles verifiable with `sha256sum` alone.
 - A host allowlist enforced by the network transport, reporting the origin of
