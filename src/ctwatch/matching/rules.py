@@ -138,7 +138,7 @@ def lookalike_signal(candidate: str, reference: str) -> tuple[float, str]:
 
     plain = levenshtein(candidate, reference)
     if plain == 0:
-        return 0.0, "identical to the watched name"
+        return 0.0, f"the registered name is exactly {reference!r}"
 
     disguised = confusable_distance(candidate, reference)
     longest = max(len(candidate), len(reference), 1)
