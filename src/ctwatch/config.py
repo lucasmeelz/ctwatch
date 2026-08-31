@@ -170,10 +170,21 @@ class CertSpotterConfig(StrictModel):
 
 
 class CertStreamConfig(StrictModel):
+    """The live feed of newly issued certificates.
+
+    The public CertStream server is a single point of failure and is often
+    unavailable; ``fallback_to_polling`` is what keeps a monitor useful when it
+    is. Point ``url`` at a self-hosted server for anything that has to run
+    unattended.
+    """
+
     enabled: bool = False
     url: str = "wss://certstream.calidog.io/"
     reconnect_delay_seconds: float = 5.0
+    max_reconnect_delay_seconds: float = 300.0
+    max_consecutive_failures: int = 5
     fallback_to_polling: bool = True
+    polling_interval_seconds: float = 900.0
 
 
 class SourcesConfig(StrictModel):
@@ -272,6 +283,42 @@ class EnrichConfig(StrictModel):
     urlscan: UrlscanConfig = Field(default_factory=UrlscanConfig)
 
 
+class ConsoleNotifyConfig(StrictModel):
+    enabled: bool = True
+
+
+class JsonlNotifyConfig(StrictModel):
+    enabled: bool = False
+    path: Path = Path("alerts.jsonl")
+
+
+class WebhookNotifyConfig(StrictModel):
+    """An HTTPS endpoint to post alerts to.
+
+    The host is added to the outbound allowlist when this is enabled, and
+    nowhere else: an operator opting into a webhook is declaring that host, the
+    same way they declare a source.
+    """
+
+    enabled: bool = False
+    url: str = ""
+    timeout_seconds: float = 10.0
+    min_score: float = 0.0
+
+    @model_validator(mode="after")
+    def _needs_a_url(self) -> WebhookNotifyConfig:
+        if self.enabled and not self.url.startswith("https://"):
+            msg = "a webhook must be enabled with an https:// url"
+            raise ValueError(msg)
+        return self
+
+
+class NotifyConfig(StrictModel):
+    console: ConsoleNotifyConfig = Field(default_factory=ConsoleNotifyConfig)
+    jsonl: JsonlNotifyConfig = Field(default_factory=JsonlNotifyConfig)
+    webhook: WebhookNotifyConfig = Field(default_factory=WebhookNotifyConfig)
+
+
 class StorageConfig(StrictModel):
     database: Path = Path("ctwatch.db")
     evidence_dir: Path = Path("evidence")
@@ -301,6 +348,7 @@ class Config(StrictModel):
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     permutations: PermutationsConfig = Field(default_factory=PermutationsConfig)
     enrich: EnrichConfig = Field(default_factory=EnrichConfig)
+    notify: NotifyConfig = Field(default_factory=NotifyConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
 

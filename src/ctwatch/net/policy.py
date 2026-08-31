@@ -37,6 +37,13 @@ def allowed_hosts(config: Config) -> list[str]:
         if host:
             hosts.add(host)
 
+    if config.notify.webhook.enabled:
+        # Opting into a webhook is declaring its host, the same way a source is
+        # declared. It is never inferred from anything observed.
+        host = _host_of(config.notify.webhook.url)
+        if host:
+            hosts.add(host)
+
     hosts.update(config.network.extra_allowed_hosts)
     return sorted(hosts)
 

@@ -21,6 +21,7 @@ from ctwatch import __version__
 from ctwatch.config import DEFAULT_CONFIG_FILENAME, Config, ConfigError, load_config
 from ctwatch.enrichment import enrich_domains
 from ctwatch.findings import assess_targets
+from ctwatch.monitor import run_monitor
 from ctwatch.names import InvalidDomainNameError, normalize
 from ctwatch.net.client import NetworkPolicyError
 from ctwatch.net.policy import allowed_hosts
@@ -384,6 +385,104 @@ def permutations(
         console.print(f"[dim]{len(produced)} candidate(s); nothing was contacted[/dim]")
 
     _emit(state, [_permutation_payload(permutation) for permutation in produced], render)
+
+
+@app.command()
+def monitor(
+    ctx: typer.Context,
+    target: Annotated[
+        list[str] | None,
+        typer.Option("--target", help="Watch one domain. Repeatable; defaults to all."),
+    ] = None,
+    variants: Annotated[
+        int,
+        typer.Option(
+            "--variants",
+            help="Candidates per brand to hold in the matcher. Costs memory, not requests.",
+        ),
+    ] = 500,
+    max_certificates: Annotated[
+        int | None,
+        typer.Option("--max-certificates", help="Stop after this many. Mostly for testing."),
+    ] = None,
+) -> None:
+    """Follow the live certificate feed and report what matches the watchlist.
+
+    Unlike a scan, coverage here is not paid for by the name: every certificate
+    that goes past is checked against the whole candidate set at once. Only the
+    ones that match are stored.
+    """
+
+    state = _state(ctx)
+    config = _load(state)
+
+    if not config.sources.certstream.enabled:
+        _fail(
+            "the live feed is disabled; set sources.certstream.enabled in the configuration",
+            state=state,
+        )
+        return
+
+    config.storage.evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    with open_database(config.storage.database) as connection:
+        repository = Repository(connection)
+        sync_targets_from_config(repository, config)
+
+        available = repository.list_targets()
+        if target:
+            wanted = {normalize(item).ascii_name for item in target}
+            selected = [item for item in available if item.canonical_domain in wanted]
+            missing = wanted - {item.canonical_domain for item in selected}
+            if missing:
+                _fail(f"not on the watchlist: {', '.join(sorted(missing))}", state=state)
+                return
+        else:
+            selected = available
+
+        if not selected:
+            _fail("the watchlist is empty; run `ctwatch init` first", state=state)
+            return
+
+        evidence = EvidenceStore(config.storage.evidence_dir, repository)
+
+        if not state.json_output:
+            console.print(
+                f"watching {len(selected)} brand(s) against {config.sources.certstream.url}"
+            )
+            console.print("[dim]press Ctrl-C to stop[/dim]\n")
+
+        try:
+            report = asyncio.run(
+                run_monitor(
+                    config=config,
+                    repository=repository,
+                    evidence=evidence,
+                    targets=selected,
+                    variants=variants,
+                    max_certificates=max_certificates,
+                )
+            )
+        except KeyboardInterrupt:
+            console.print("\n[dim]stopped[/dim]")
+            raise typer.Exit(0) from None
+
+    def render() -> None:
+        console.print()
+        console.print(
+            f"{report.certificates_seen} certificate(s) seen, "
+            f"{report.matches} match(es), {report.alerts} alert(s), "
+            f"{report.archived} message(s) archived"
+        )
+        if report.polling_rounds:
+            console.print(
+                f"[yellow]the feed was unavailable; fell back to polling "
+                f"{report.polling_rounds} time(s)[/yellow]"
+            )
+        for message in report.errors:
+            error_console.print(f"[yellow]{message}[/yellow]")
+
+    _emit(state, report.as_dict(), render)
 
 
 @app.command()
