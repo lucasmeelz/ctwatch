@@ -15,6 +15,8 @@ from typing import Any
 import httpx
 
 from ctwatch.config import Config
+from ctwatch.matching.matcher import VariantMatcher
+from ctwatch.names import DomainName
 from ctwatch.net.client import PassiveHttpClient, UpstreamError
 from ctwatch.net.policy import build_allowlist
 from ctwatch.permutations.generator import PermutationGenerator
@@ -28,6 +30,10 @@ from ctwatch.store.models import WatchTarget
 from ctwatch.store.repository import Repository
 
 MAX_REPORTED_ERRORS = 5
+
+# Candidates held while deciding whether a certificate's names concern the
+# brand. This costs memory once per target, never a request.
+RELEVANCE_VARIANTS = 500
 
 
 @dataclass(slots=True)
@@ -43,6 +49,7 @@ class ScanSummary:
     new_domains: int = 0
     observations: int = 0
     failed_queries: int = 0
+    unattributed: int = 0
     by_source: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
@@ -68,6 +75,7 @@ class ScanSummary:
             "new_domains": self.new_domains,
             "observations": self.observations,
             "failed_queries": self.failed_queries,
+            "unattributed": self.unattributed,
             "by_source": dict(self.by_source),
             "errors": list(self.errors),
         }
@@ -132,12 +140,34 @@ def build_sources(
     return sources
 
 
+def is_relevant(name: DomainName, *, target: WatchTarget, matcher: VariantMatcher) -> bool:
+    """Does this name have anything to do with the brand?
+
+    A source returns whole certificates, and a certificate lists whatever its
+    requester asked for. One observed here carried a hundred names, of which one
+    was the brand's; attributing the other ninety-nine to the brand — as simply
+    storing every name does — is how ninety-nine unrelated businesses became
+    findings about Le Figaro.
+
+    Two things make a name relevant: it belongs to the brand's own registration,
+    or it resembles it. Everything else is stored without a target, so the
+    certificate neighbourhood remains available for ownership inference while
+    nothing is attributed to a brand it has no connection to.
+    """
+
+    parts = split(name.ascii_name)
+    if parts.registrable_domain == split(target.canonical_domain).registrable_domain:
+        return True
+    return matcher.match(name.ascii_name) is not None
+
+
 def persist_observation(
     repository: Repository,
     observation: CertObservation,
     *,
     target: WatchTarget | None,
     summary: ScanSummary,
+    matcher: VariantMatcher | None = None,
 ) -> None:
     """Write one certificate and its names, counting what was new."""
 
@@ -169,13 +199,24 @@ def persist_observation(
         if not was_known:
             summary.new_domains += 1
 
+        attributed = target
+        if (
+            target is not None
+            and matcher is not None
+            and not is_relevant(name, target=target, matcher=matcher)
+        ):
+            # Kept, but not attributed: the certificate neighbourhood is what
+            # later proves which lookalikes the brand owns.
+            attributed = None
+            summary.unattributed += 1
+
         recorded = repository.record_observation(
             domain_id=domain.id,
             evidence_id=observation.evidence_id,
             source=observation.source,
             observed_at=observation.retrieved_at,
             certificate_id=certificate.id,
-            target_id=None if target is None else target.id,
+            target_id=None if attributed is None else attributed.id,
             query=observation.query,
         )
         if recorded is not None:
@@ -201,6 +242,7 @@ async def scan_target(
 
     summary = ScanSummary(brand=target.brand, canonical_domain=target.canonical_domain)
     planned = queries or [SourceQuery(pattern=target.canonical_domain, exact=True, since=since)]
+    matcher = VariantMatcher.build([target], variants=RELEVANCE_VARIANTS)
 
     for query in planned:
         for source in sources:
@@ -210,7 +252,13 @@ async def scan_target(
             try:
                 found = 0
                 async for observation in source.search(query):
-                    persist_observation(repository, observation, target=target, summary=summary)
+                    persist_observation(
+                        repository,
+                        observation,
+                        target=target,
+                        summary=summary,
+                        matcher=matcher,
+                    )
                     found += 1
             except (SourceError, UpstreamError) as exc:
                 summary.record_failure(f"{source.name}: {exc}")

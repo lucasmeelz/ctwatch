@@ -94,6 +94,24 @@ class Allowlist:
         )
 
 
+# Past this many distinct registrations on one certificate, it is a provider's
+# certificate rather than an organisation's. Measured on real data: media-group
+# certificates carry 3 to 18 registrations, multi-tenant provider certificates
+# carry one per name.
+MAX_SHARED_REGISTRATIONS = 25
+
+# Names per distinct registration. A group certificate lists many hosts of a few
+# domains (measured: 5.2 to 6.3). A provider certificate lists one host each
+# (measured: 1.00 to 1.02). The gap is wide enough to be a rule.
+MINIMUM_NAMES_PER_REGISTRATION = 2.0
+
+# Below this many registrations, spread means nothing — two names on one
+# certificate have no distribution to speak of. A small certificate carrying the
+# brand is overwhelmingly the brand's own, and demanding statistics of it would
+# reject the very case the rule exists for.
+SMALL_CERTIFICATE_REGISTRATIONS = 4
+
+
 class OwnershipIndex:
     """Ownership read off the certificates themselves.
 
@@ -101,15 +119,28 @@ class OwnershipIndex:
     was issued to whoever proved control of ``lemonde.fr``. The second name is
     the brand, not an impersonation of it, and no configuration was needed to
     establish that.
+
+    That reasoning holds only when the certificate belongs to an organisation.
+    It fails completely on the certificates providers issue: one observed here
+    carried a hundred names, of which exactly one was the brand's and
+    ninety-nine belonged to unrelated businesses around the world. Taken at face
+    value it declared all ninety-nine to be Le Figaro's — and, worse, would have
+    silently suppressed a genuine impersonation that happened to sit behind the
+    same provider. The guards below are what separate the two cases.
     """
 
     def __init__(self, repository: Repository, target: WatchTarget) -> None:
         self._repository = repository
         self._target = target
         self._canonical = target.canonical_domain
+        self._allowlist = Allowlist.for_target(target)
 
     def _belongs_to_brand(self, name: str) -> bool:
-        return _covers(self._canonical, name)
+        if _covers(self._canonical, name):
+            return True
+        # A defensive registration the operator declared can anchor an
+        # inference just as well as the canonical name.
+        return any(_covers(entry, name) for entry in self._allowlist.entries)
 
     def decide(self, name: DomainName) -> AllowlistDecision:
         domain = self._repository.get_domain(name.ascii_name)
@@ -119,18 +150,36 @@ class OwnershipIndex:
                 reason="never observed in a certificate, so nothing links it to the brand",
             )
 
-        for other in self._repository.names_sharing_certificate(domain.id):
-            if other == name.ascii_name:
+        for names in self._repository.certificate_neighbourhoods(domain.id):
+            brand_names = [other for other in names if self._belongs_to_brand(other)]
+            if not brand_names:
                 continue
-            if self._belongs_to_brand(other):
-                return AllowlistDecision(
-                    allowed=True,
-                    reason=(
-                        f"appears on the same certificate as {other}, "
-                        "so it was issued to whoever controls the watched domain"
-                    ),
-                    rule="shared_certificate",
-                )
+
+            registrations = {registrable_or_none(other) or other for other in names}
+            spread = len(names) / max(1, len(registrations))
+
+            if len(registrations) > SMALL_CERTIFICATE_REGISTRATIONS:
+                if len(registrations) > MAX_SHARED_REGISTRATIONS:
+                    continue
+                if spread < MINIMUM_NAMES_PER_REGISTRATION:
+                    # One host per registration is what a provider's certificate
+                    # looks like. Being a tenant of the same provider as the
+                    # brand says nothing about who owns the name.
+                    continue
+                if len(brand_names) < 2:
+                    # A lone brand host among many strangers is a tenancy, not a
+                    # title deed.
+                    continue
+
+            return AllowlistDecision(
+                allowed=True,
+                reason=(
+                    f"co-signed with {len(brand_names)} name(s) of the brand on a "
+                    f"certificate covering {len(registrations)} registration(s), "
+                    f"including {brand_names[0]}"
+                ),
+                rule="shared_certificate",
+            )
 
         return AllowlistDecision(
             allowed=False, reason="shares no certificate with the watched domain"

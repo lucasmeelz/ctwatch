@@ -472,6 +472,34 @@ class Repository:
         ).fetchall()
         return [_text(row, "name") for row in rows]
 
+    def certificate_neighbourhoods(self, domain_id: int) -> list[list[str]]:
+        """The names on each certificate this domain appears on, per certificate.
+
+        Kept separate rather than flattened: whether a certificate proves
+        ownership depends on how many distinct registrations it spans, and that
+        question cannot be asked of a merged list.
+        """
+
+        rows = self._connection.execute(
+            """
+            SELECT theirs.certificate_id AS cert, other_domain.name AS name
+            FROM observations AS mine
+            JOIN observations AS theirs
+                ON theirs.certificate_id = mine.certificate_id
+            JOIN domains AS other_domain
+                ON other_domain.id = theirs.domain_id
+            WHERE mine.domain_id = ?
+              AND mine.certificate_id IS NOT NULL
+            ORDER BY theirs.certificate_id, other_domain.name
+            """,
+            (domain_id,),
+        ).fetchall()
+
+        grouped: dict[int, list[str]] = {}
+        for row in rows:
+            grouped.setdefault(int(row["cert"]), []).append(_text(row, "name"))
+        return [sorted(set(names)) for names in grouped.values()]
+
     def count_observations(self, *, target_id: int | None = None) -> int:
         if target_id is None:
             row = self._connection.execute("SELECT COUNT(*) AS total FROM observations").fetchone()

@@ -357,3 +357,125 @@ async def test_an_ordinary_failure_does_not_disable_a_source(
         transport=httpx.MockTransport(handler),
     )
     assert calls.count("api.certspotter.com") == 6
+
+
+# ---------------------------------------------------------------------------
+# What a certificate's names are allowed to say about a brand
+
+
+def use_certspotter(config: Config) -> None:
+    """The fixture pins these cases to crt.sh; this listing is Cert Spotter's."""
+
+    config.sources.order = ["certspotter"]
+    config.sources.certspotter.enabled = True
+    config.sources.certspotter.rate_limit_rps = 0
+    config.sources.crtsh.enabled = False
+
+
+def certificate_listing(*names: str) -> bytes:
+    entries = ", ".join(
+        f'{{"id": "{index}", "cert_sha256": "{index:064d}", '
+        f'"dns_names": ["{name}"], "not_before": "2026-03-08T03:12:52Z"}}'
+        for index, name in enumerate(names, start=1)
+    )
+    return f"[{entries}]".encode()
+
+
+async def scan_names(
+    config: Config,
+    repository: Repository,
+    evidence_store: EvidenceStore,
+    *names: str,
+) -> None:
+    target = repository.upsert_target(
+        brand="Le Monde", canonical_domain="lemonde.fr", keywords=["actu", "info"]
+    )
+    body = certificate_listing(*names)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("after"):
+            return httpx.Response(200, content=b"[]")
+        return httpx.Response(200, content=body)
+
+    await run_scan(
+        config=config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        transport=httpx.MockTransport(handler),
+    )
+
+
+async def test_a_strangers_name_on_the_brands_certificate_is_not_the_brands_problem(
+    config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    """The defect that produced ninety-nine findings about Le Figaro.
+
+    A certificate lists whatever its requester asked for. Storing every name on
+    it as "observed for this brand" is how unrelated businesses around the world
+    became findings about a newspaper.
+    """
+
+    use_certspotter(config)
+    await scan_names(
+        config,
+        repository,
+        evidence_store,
+        "lemonde.fr",
+        "backgammon-in-muenchen.de",
+        "aidanfieldpreschool.org.nz",
+        "quotebook.online",
+    )
+
+    # Everything is kept: the neighbourhood is what later proves ownership.
+    assert repository.count_domains() == 4
+    for stranger in ("quotebook.online", "backgammon-in-muenchen.de"):
+        record = repository.get_domain(stranger)
+        assert record is not None
+
+    # But only the brand's own name is attributed to the brand.
+    attributed = {record.name for record in repository.domains_for_target(1)}
+    assert attributed == {"lemonde.fr"}
+
+
+async def test_a_lookalike_on_the_certificate_is_still_attributed(
+    config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    """Filtering must not throw away the thing the tool exists to find."""
+
+    use_certspotter(config)
+    await scan_names(
+        config,
+        repository,
+        evidence_store,
+        "lemonde.fr",
+        "lemonde-actu.info",
+        "unrelated-shop.de",
+    )
+
+    attributed = {record.name for record in repository.domains_for_target(1)}
+    assert "lemonde-actu.info" in attributed
+    assert "unrelated-shop.de" not in attributed
+
+
+async def test_the_scan_reports_what_it_declined_to_attribute(
+    config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    use_certspotter(config)
+    target = repository.upsert_target(brand="Le Monde", canonical_domain="lemonde.fr")
+    body = certificate_listing("lemonde.fr", "stranger-one.de", "stranger-two.example")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.params.get("after"):
+            return httpx.Response(200, content=b"[]")
+        return httpx.Response(200, content=body)
+
+    summaries = await run_scan(
+        config=config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        transport=httpx.MockTransport(handler),
+    )
+    assert summaries[0].unattributed == 2
+    assert summaries[0].as_dict()["unattributed"] == 2
