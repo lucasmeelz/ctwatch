@@ -84,6 +84,12 @@ def _is_plausible(ascii_name: str) -> bool:
     return all(_ASCII_LABEL.match(label) for label in labels)
 
 
+def to_unicode_label(label: str) -> str:
+    """The readable form of a single label, decoding punycode when present."""
+
+    return _to_unicode(label)
+
+
 def normalize(raw: str) -> DomainName:
     """Normalise a name coming from a certificate or from user input."""
 

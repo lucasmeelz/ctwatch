@@ -47,14 +47,53 @@ class TargetConfig(StrictModel):
         return [item.strip().lower() for item in value if item.strip()]
 
 
+# Suffixes that turn up disproportionately in impersonation registrations:
+# cheap or free, no verification, and in several cases actively news-flavoured.
+DEFAULT_HIGH_RISK_TLDS: tuple[str, ...] = (
+    "top",
+    "xyz",
+    "icu",
+    "sbs",
+    "cfd",
+    "info",
+    "click",
+    "link",
+    "live",
+    "shop",
+    "online",
+    "site",
+    "news",
+    "press",
+)
+DEFAULT_MEDIUM_RISK_TLDS: tuple[str, ...] = ("net", "org", "co", "io", "me", "biz")
+
+
 class TldRiskConfig(StrictModel):
-    high: list[str] = Field(default_factory=list)
-    medium: list[str] = Field(default_factory=list)
+    """Suffix risk lists.
+
+    Defaults live here rather than only in the shipped YAML, so that a
+    configuration written from scratch still scores suffixes sensibly instead
+    of silently treating every one of them as neutral.
+    """
+
+    high: list[str] = Field(default_factory=lambda: list(DEFAULT_HIGH_RISK_TLDS))
+    medium: list[str] = Field(default_factory=lambda: list(DEFAULT_MEDIUM_RISK_TLDS))
 
     @field_validator("high", "medium", mode="after")
     @classmethod
     def _normalize(cls, value: list[str]) -> list[str]:
         return [item.strip().lower().lstrip(".") for item in value if item.strip()]
+
+
+# The criteria a score can be built from. Declared here so that a typo in the
+# weights section fails at load time rather than silently dropping a signal.
+SCORING_CRITERIA: tuple[str, ...] = (
+    "levenshtein",
+    "homoglyph",
+    "keyword_combo",
+    "tld_risk",
+    "cert_age",
+)
 
 
 class ScoringConfig(StrictModel):
@@ -79,6 +118,11 @@ class ScoringConfig(StrictModel):
     @field_validator("weights", mode="after")
     @classmethod
     def _positive_weights(cls, value: dict[str, float]) -> dict[str, float]:
+        unknown = sorted(set(value) - set(SCORING_CRITERIA))
+        if unknown:
+            known = ", ".join(SCORING_CRITERIA)
+            msg = f"unknown scoring criterion: {', '.join(unknown)}. Known criteria: {known}"
+            raise ValueError(msg)
         for name, weight in value.items():
             if weight < 0:
                 msg = f"scoring weight {name!r} must not be negative"
