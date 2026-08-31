@@ -47,6 +47,12 @@ console = Console()
 error_console = Console(stderr=True)
 
 
+JsonOption = Annotated[
+    bool,
+    typer.Option("--json", help="Emit machine-readable JSON instead of a table."),
+]
+
+
 @dataclass(slots=True)
 class AppState:
     config_path: Path
@@ -71,11 +77,19 @@ evidence_app = typer.Typer(
 app.add_typer(evidence_app, name="evidence")
 
 
-def _state(ctx: typer.Context) -> AppState:
+def _state(ctx: typer.Context, json_output: bool = False) -> AppState:
+    """The shared state, with --json honoured wherever it was typed.
+
+    Click only accepts a group option before the subcommand. Nobody types it
+    there, so every command carries its own and the two are merged here.
+    """
+
     state = ctx.obj
     if not isinstance(state, AppState):  # pragma: no cover - typer always sets it
         msg = "command was invoked without application state"
         raise RuntimeError(msg)
+    if json_output and not state.json_output:
+        return AppState(config_path=state.config_path, json_output=True)
     return state
 
 
@@ -146,10 +160,10 @@ def main(
 
 
 @app.command()
-def version(ctx: typer.Context) -> None:
+def version(ctx: typer.Context, json_output: JsonOption = False) -> None:
     """Print the ctwatch version."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     _emit(state, {"version": __version__}, lambda: console.print(__version__))
 
 
@@ -159,10 +173,11 @@ def init(
     force: Annotated[
         bool, typer.Option("--force", help="Overwrite an existing configuration file.")
     ] = False,
+    json_output: JsonOption = False,
 ) -> None:
     """Create the configuration file, the database and the evidence directory."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     created_config = False
 
     if state.config_path.exists() and not force:
@@ -221,10 +236,11 @@ def target_add(
             help="Known-legitimate lookalike, such as a defensive registration. Repeatable.",
         ),
     ] = None,
+    json_output: JsonOption = False,
 ) -> None:
     """Add a brand to the watchlist, or update the one already recorded."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     try:
@@ -255,10 +271,11 @@ def target_list(
     all_targets: Annotated[
         bool, typer.Option("--all", help="Include targets that were deactivated.")
     ] = False,
+    json_output: JsonOption = False,
 ) -> None:
     """Show the watchlist."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     with open_database(config.storage.database) as connection:
@@ -342,10 +359,11 @@ def permutations(
             help="Word to combine with the name. Defaults to the watchlist entry's own.",
         ),
     ] = None,
+    json_output: JsonOption = False,
 ) -> None:
     """Show the candidate names a scan would look up. Contacts nothing."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     kinds = set(PermutationKind)
@@ -411,6 +429,7 @@ def review(
     note: Annotated[
         str | None, typer.Option("--note", help="Why. Kept alongside the finding.")
     ] = None,
+    json_output: JsonOption = False,
 ) -> None:
     """Record a human verdict on a finding.
 
@@ -418,7 +437,7 @@ def review(
     allowed to change its own opinion, never someone else's.
     """
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     chosen = status.strip().lower()
@@ -474,6 +493,7 @@ def dashboard(
     open_it: Annotated[
         bool, typer.Option("--open/--no-open", help="Open the page in a browser.")
     ] = False,
+    json_output: JsonOption = False,
 ) -> None:
     """Write a browsable page of the findings. One file, no server.
 
@@ -481,7 +501,7 @@ def dashboard(
     network, and can be attached to an email or dropped in a shared folder.
     """
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     with open_database(config.storage.database) as connection:
@@ -542,10 +562,11 @@ def report(
     limit: Annotated[
         int | None, typer.Option("--limit", help="Stop after this many findings.")
     ] = None,
+    json_output: JsonOption = False,
 ) -> None:
     """Write an analysis report for the findings on record."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     chosen = output_format.strip().lower()
@@ -611,10 +632,11 @@ def evidence_export(
         Path | None,
         typer.Option("--out", help="Directory to create. Defaults to ./exports/finding-<id>."),
     ] = None,
+    json_output: JsonOption = False,
 ) -> None:
     """Write a folder documenting one finding, checkable without this tool."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     with open_database(config.storage.database) as connection:
@@ -658,6 +680,7 @@ def monitor(
         int | None,
         typer.Option("--max-certificates", help="Stop after this many. Mostly for testing."),
     ] = None,
+    json_output: JsonOption = False,
 ) -> None:
     """Follow the live certificate feed and report what matches the watchlist.
 
@@ -666,7 +689,7 @@ def monitor(
     ones that match are stored.
     """
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     if not config.sources.certstream.enabled:
@@ -761,6 +784,7 @@ def enrich(
         typer.Option("--min-score", help="Only enrich findings at or above this score."),
     ] = None,
     limit: Annotated[int, typer.Option("--limit", help="Stop after this many domains.")] = 10,
+    json_output: JsonOption = False,
 ) -> None:
     """Add registration, resolution and third-party rendering to findings.
 
@@ -768,7 +792,7 @@ def enrich(
     resolver, urlscan.io. None of them contacts the domain itself.
     """
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
     threshold = config.scoring.review_threshold if min_score is None else min_score
     config.storage.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -896,10 +920,11 @@ def findings(
             help="Re-score stored observations first. Contacts nothing.",
         ),
     ] = True,
+    json_output: JsonOption = False,
 ) -> None:
     """List assessed findings, highest score first."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
     threshold = config.scoring.review_threshold if min_score is None else min_score
 
@@ -981,10 +1006,11 @@ def scan(
             ),
         ),
     ] = 0,
+    json_output: JsonOption = False,
 ) -> None:
     """Query the Certificate Transparency sources for the watched domains."""
 
-    state = _state(ctx)
+    state = _state(ctx, json_output)
     config = _load(state)
 
     cutoff = None
