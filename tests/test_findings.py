@@ -99,18 +99,55 @@ def test_a_lookalike_becomes_a_reported_finding(
     assert finding.suppressed is False
 
 
-def test_the_watched_domain_itself_is_suppressed(
+def test_the_watched_domain_is_not_a_finding_at_all(
     repository: Repository, store: EvidenceStore, target: WatchTarget, config: Config
 ) -> None:
+    """The brand's own site is not a judgement to audit, it is arithmetic."""
+
     observe(repository, store, target, "lemonde.fr", not_before=NOW)
     report, assessments = assess_target(
         repository=repository, config=config, target=target, now=NOW
     )
 
-    assert report.suppressed == 1
-    assert report.reported == 0
-    assert assessments[0].confidence.credibility == "5"
-    assert assessments[0].status == "allowlisted"
+    assert report.own_infrastructure == 1
+    assert report.assessed == 0
+    assert assessments == []
+    assert repository.list_findings(include_allowlisted=True) == []
+
+
+def test_the_brands_own_subdomains_are_not_findings(
+    repository: Repository, store: EvidenceStore, target: WatchTarget, config: Config
+) -> None:
+    """A newsroom has hundreds of these, and every one of them buries a real
+    finding under a list of the newsroom's own pages."""
+
+    for name in ("blog.lemonde.fr", "salon-artistique.lemonde.fr", "stg-festival.lemonde.fr"):
+        observe(repository, store, target, name, not_before=NOW)
+    observe(repository, store, target, "lemonde-actu.info", not_before=NOW)
+
+    report, assessments = assess_target(
+        repository=repository, config=config, target=target, now=NOW
+    )
+
+    assert report.own_infrastructure == 3
+    assert report.assessed == 1
+    assert [item.domain.name for item in assessments] == ["lemonde-actu.info"]
+
+
+def test_an_own_subdomain_recorded_before_is_removed_on_reassessment(
+    repository: Repository, store: EvidenceStore, target: WatchTarget, config: Config
+) -> None:
+    """Databases written by an earlier version carry those rows; clear them."""
+
+    domain = repository.upsert_domain(name="salon-artistique.lemonde.fr")
+    repository.upsert_finding(
+        target_id=target.id, domain_id=domain.id, score=0.48, breakdown={}, status="allowlisted"
+    )
+    observe(repository, store, target, "salon-artistique.lemonde.fr", not_before=NOW)
+    assert repository.list_findings(include_allowlisted=True)
+
+    assess_target(repository=repository, config=config, target=target, now=NOW)
+    assert repository.list_findings(include_allowlisted=True) == []
 
 
 def test_a_declared_defensive_registration_is_suppressed(
@@ -138,7 +175,9 @@ def test_a_domain_sharing_a_certificate_with_the_brand_is_suppressed(
         repository=repository, config=config, target=target, now=NOW
     )
 
-    assert report.suppressed == 2
+    # lemonde.fr itself is own infrastructure; the other name is a judgement.
+    assert report.own_infrastructure == 1
+    assert report.suppressed == 1
     grouped = next(a for a in assessments if a.domain.name == "lemonde-lecteurs.fr")
     assert grouped.decision.rule == "shared_certificate"
     assert "lemonde.fr" in grouped.decision.reason
@@ -175,9 +214,13 @@ def test_reassessment_does_not_overwrite_a_human_verdict(
 def test_suppressed_findings_are_kept_but_hidden(
     repository: Repository, store: EvidenceStore, target: WatchTarget, config: Config
 ) -> None:
-    """A suppression a user cannot inspect is a suppression they cannot trust."""
+    """A suppression a user cannot inspect is a suppression they cannot trust.
 
-    observe(repository, store, target, "lemonde.fr", not_before=NOW)
+    This applies to the inferred ones — a declared allowlist entry, a shared
+    certificate — not to the brand's own subdomains, which are not a judgement.
+    """
+
+    observe(repository, store, target, "lemonde-abonnements.fr", not_before=NOW)
     assess_target(repository=repository, config=config, target=target, now=NOW)
 
     assert repository.list_findings() == []

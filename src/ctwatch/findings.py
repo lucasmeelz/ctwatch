@@ -78,6 +78,7 @@ class AssessmentReport:
     assessed: int = 0
     reported: int = 0
     suppressed: int = 0
+    own_infrastructure: int = 0
     above_threshold: int = 0
 
     def as_dict(self) -> dict[str, Any]:
@@ -87,6 +88,7 @@ class AssessmentReport:
             "assessed": self.assessed,
             "reported": self.reported,
             "suppressed": self.suppressed,
+            "own_infrastructure": self.own_infrastructure,
             "above_threshold": self.above_threshold,
         }
 
@@ -120,6 +122,18 @@ def assess_target(
         name = _domain_name(record)
 
         decision = allowlist.decide(name)
+
+        if decision.rule == "canonical":
+            # The watched domain and everything under it are the brand's own
+            # site. That is not a judgement to be audited, it is arithmetic, and
+            # keeping a finding for each of them buries the real ones under a
+            # list of the newsroom's own subdomains. They stay in the database —
+            # shared certificates with them are how other domains are recognised
+            # as the brand's — but they are not findings.
+            repository.delete_finding(target_id=target.id, domain_id=record.id)
+            report.own_infrastructure += 1
+            continue
+
         if not decision.allowed:
             decision = ownership.decide(name)
 

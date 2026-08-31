@@ -1081,6 +1081,7 @@ def scan(
         table.add_column("New", justify="right")
         table.add_column("To review", justify="right")
         table.add_column("Suppressed", justify="right")
+        table.add_column("Own", justify="right")
         for summary in summaries:
             report = reports.get(summary.canonical_domain, {})
             table.add_row(
@@ -1092,6 +1093,7 @@ def scan(
                 str(summary.new_domains),
                 str(report.get("above_threshold", 0)),
                 str(report.get("suppressed", 0)),
+                str(report.get("own_infrastructure", 0)),
             )
         console.print(table)
         for summary in summaries:

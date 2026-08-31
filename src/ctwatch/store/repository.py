@@ -717,6 +717,13 @@ class Repository:
             params.append(limit)
         return [_domain(row) for row in self._connection.execute(query, params)]
 
+    def delete_finding(self, *, target_id: int, domain_id: int) -> bool:
+        cursor = self._connection.execute(
+            "DELETE FROM findings WHERE target_id = ? AND domain_id = ?",
+            (target_id, domain_id),
+        )
+        return cursor.rowcount > 0
+
     def count_findings(self, *, target_id: int | None = None) -> int:
         if target_id is None:
             row = self._connection.execute("SELECT COUNT(*) AS total FROM findings").fetchone()
