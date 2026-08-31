@@ -20,10 +20,13 @@ from ctwatch.net.policy import build_allowlist
 from ctwatch.permutations.generator import PermutationGenerator
 from ctwatch.permutations.model import PermutationKind
 from ctwatch.sources.base import CertObservation, Source, SourceError, SourceQuery
+from ctwatch.sources.certspotter import CertSpotterSource
 from ctwatch.sources.crtsh import CrtShSource
 from ctwatch.store.evidence import EvidenceStore
 from ctwatch.store.models import WatchTarget
 from ctwatch.store.repository import Repository
+
+MAX_REPORTED_ERRORS = 5
 
 
 @dataclass(slots=True)
@@ -38,7 +41,20 @@ class ScanSummary:
     domains_seen: int = 0
     new_domains: int = 0
     observations: int = 0
+    failed_queries: int = 0
+    by_source: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+
+    def record_failure(self, message: str) -> None:
+        """Keep a few distinct failures, not one line per query.
+
+        A scan with five hundred variants against an unavailable service would
+        otherwise produce five hundred identical error strings.
+        """
+
+        self.failed_queries += 1
+        if message not in self.errors and len(self.errors) < MAX_REPORTED_ERRORS:
+            self.errors.append(message)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +66,8 @@ class ScanSummary:
             "domains_seen": self.domains_seen,
             "new_domains": self.new_domains,
             "observations": self.observations,
+            "failed_queries": self.failed_queries,
+            "by_source": dict(self.by_source),
             "errors": list(self.errors),
         }
 
@@ -76,22 +94,40 @@ def build_sources(
     repository: Repository,
     only: list[str] | None = None,
 ) -> list[Source]:
-    """Instantiate the sources enabled in the configuration."""
+    """Instantiate the enabled sources, in the configured order."""
 
-    wanted = {name.lower() for name in only} if only else None
+    wanted = {name.strip().lower() for name in only} if only else None
     sources: list[Source] = []
 
-    crtsh = config.sources.crtsh
-    if crtsh.enabled and (wanted is None or CrtShSource.name in wanted):
-        sources.append(
-            CrtShSource(
-                base_url=crtsh.base_url,
-                http=http,
-                evidence=evidence,
-                repository=repository,
-                cache_ttl_seconds=crtsh.cache_ttl_seconds,
+    for name in config.sources.order:
+        if wanted is not None and name not in wanted:
+            continue
+
+        if name == CertSpotterSource.name and config.sources.certspotter.enabled:
+            certspotter = config.sources.certspotter
+            sources.append(
+                CertSpotterSource(
+                    base_url=certspotter.base_url,
+                    api_key=certspotter.api_key(),
+                    max_pages=certspotter.max_pages,
+                    http=http,
+                    evidence=evidence,
+                    repository=repository,
+                    cache_ttl_seconds=certspotter.cache_ttl_seconds,
+                )
             )
-        )
+        elif name == CrtShSource.name and config.sources.crtsh.enabled:
+            crtsh = config.sources.crtsh
+            sources.append(
+                CrtShSource(
+                    base_url=crtsh.base_url,
+                    http=http,
+                    evidence=evidence,
+                    repository=repository,
+                    cache_ttl_seconds=crtsh.cache_ttl_seconds,
+                )
+            )
+
     return sources
 
 
@@ -150,22 +186,34 @@ async def scan_target(
     repository: Repository,
     since: datetime | None = None,
     queries: list[SourceQuery] | None = None,
+    strategy: str = "failover",
 ) -> ScanSummary:
-    """Run every source against one target and persist the results."""
+    """Run the planned queries against the sources and persist the results.
+
+    Under the default failover strategy, each query stops at the first source
+    that answers. crt.sh is unavailable often enough that a scan which gave up
+    on the first failure would be useless, and asking every source for every
+    name doubles the request budget for little gain.
+    """
 
     summary = ScanSummary(brand=target.brand, canonical_domain=target.canonical_domain)
     planned = queries or [SourceQuery(pattern=target.canonical_domain, exact=True, since=since)]
 
-    for source in sources:
-        for query in planned:
+    for query in planned:
+        for source in sources:
             summary.queries += 1
             try:
+                found = 0
                 async for observation in source.search(query):
                     persist_observation(repository, observation, target=target, summary=summary)
+                    found += 1
             except (SourceError, UpstreamError) as exc:
-                # One failure is normal — crt.sh alone is unavailable often
-                # enough that aborting the scan would make the tool useless.
-                summary.errors.append(f"{source.name}: {exc}")
+                summary.record_failure(f"{source.name}: {exc}")
+                continue
+
+            summary.by_source[source.name] = summary.by_source.get(source.name, 0) + found
+            if strategy == "failover":
+                break
 
     return summary
 
@@ -218,13 +266,30 @@ async def run_scan(
     does not bypass the host allowlist: the policy transport still wraps it.
     """
 
-    crtsh = config.sources.crtsh
+    # One client is shared by every source, so its throttle has to be the most
+    # conservative of the enabled ones: crt.sh tolerates far less than Cert
+    # Spotter, and exceeding what it accepts is how a scan turns into a wall of
+    # 502s.
+    limits = [
+        source
+        for source, enabled in (
+            (config.sources.certspotter, config.sources.certspotter.enabled),
+            (config.sources.crtsh, config.sources.crtsh.enabled),
+        )
+        if enabled
+    ]
+    rate = min((source.rate_limit_rps for source in limits), default=0.5)
+    timeout = max((source.timeout_seconds for source in limits), default=45.0)
+    attempts = max((source.max_attempts for source in limits), default=4)
+    backoff = max((source.retry_backoff_seconds for source in limits), default=1.0)
+
     http = PassiveHttpClient(
         allowlist=build_allowlist(config),
         user_agent=config.network.user_agent,
-        timeout=crtsh.timeout_seconds,
-        max_attempts=crtsh.max_attempts,
-        requests_per_second=crtsh.rate_limit_rps,
+        timeout=timeout,
+        max_attempts=attempts,
+        requests_per_second=rate,
+        backoff_base_seconds=backoff,
         transport=transport,
     )
     try:
@@ -244,6 +309,7 @@ async def run_scan(
                 repository=repository,
                 since=since,
                 queries=planned,
+                strategy=config.sources.strategy,
             )
             summary.variants_queried = max(0, len(planned) - 1)
             summaries.append(summary)

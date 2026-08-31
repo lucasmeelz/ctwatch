@@ -15,6 +15,7 @@ from ctwatch.store.repository import Repository
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LISTING = (FIXTURES / "crtsh_lemonde.json").read_bytes()
+CERTSPOTTER_PAGE = (FIXTURES / "certspotter_page1.json").read_bytes()
 
 
 @pytest.fixture
@@ -22,7 +23,12 @@ def config(tmp_path: Path) -> Config:
     return Config.model_validate(
         {
             "targets": [{"brand": "Le Monde", "canonical_domains": ["lemonde.fr"]}],
-            "sources": {"crtsh": {"rate_limit_rps": 0}},
+            # These cases exercise the crt.sh source specifically.
+            "sources": {
+                "order": ["crtsh"],
+                "certspotter": {"enabled": False},
+                "crtsh": {"rate_limit_rps": 0, "max_attempts": 1, "retry_backoff_seconds": 0},
+            },
             "storage": {
                 "database": str(tmp_path / "ctwatch.db"),
                 "evidence_dir": str(tmp_path / "evidence"),
@@ -164,7 +170,132 @@ async def test_scan_never_reaches_a_watched_domain(
         repository=repository,
         evidence=evidence_store,
         targets=[target],
+        variants=20,
         transport=httpx.MockTransport(handler),
     )
-    assert contacted == ["crt.sh"]
+    assert set(contacted) == {"crt.sh"}
     assert normalize("lemonde.fr").ascii_name not in contacted
+
+
+# ---------------------------------------------------------------------------
+# Failover between sources
+
+
+@pytest.fixture
+def two_source_config(tmp_path: Path) -> Config:
+    return Config.model_validate(
+        {
+            "targets": [{"brand": "Le Monde", "canonical_domains": ["lemonde.fr"]}],
+            "sources": {
+                "order": ["certspotter", "crtsh"],
+                "certspotter": {
+                    "rate_limit_rps": 0,
+                    "max_attempts": 1,
+                    "retry_backoff_seconds": 0,
+                },
+                "crtsh": {"rate_limit_rps": 0, "max_attempts": 1, "retry_backoff_seconds": 0},
+            },
+            "storage": {
+                "database": str(tmp_path / "ctwatch.db"),
+                "evidence_dir": str(tmp_path / "evidence"),
+            },
+        }
+    )
+
+
+def by_host(**bodies: tuple[int, bytes]) -> tuple[httpx.MockTransport, list[str]]:
+    contacted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        contacted.append(host)
+        status, body = bodies.get(host.replace(".", "_"), (200, b"[]"))
+        if status == 200 and request.url.params.get("after"):
+            # Cert Spotter pages with a cursor; the run ends on an empty page.
+            return httpx.Response(200, content=b"[]")
+        return httpx.Response(status, content=body)
+
+    return httpx.MockTransport(handler), contacted
+
+
+async def test_the_first_source_that_answers_wins(
+    two_source_config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    transport, contacted = by_host(
+        api_certspotter_com=(200, CERTSPOTTER_PAGE), crt_sh=(200, LISTING)
+    )
+    target = repository.upsert_target(brand="Le Monde", canonical_domain="lemonde.fr")
+    summaries = await run_scan(
+        config=two_source_config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        transport=transport,
+    )
+
+    assert "crt.sh" not in contacted
+    assert summaries[0].by_source == {"certspotter": 2}
+
+
+async def test_scan_falls_back_when_the_first_source_is_down(
+    two_source_config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    """The situation crt.sh spends a good deal of its time in, reversed."""
+
+    transport, contacted = by_host(
+        api_certspotter_com=(502, b"<html>bad gateway</html>"), crt_sh=(200, LISTING)
+    )
+    target = repository.upsert_target(brand="Le Monde", canonical_domain="lemonde.fr")
+    summaries = await run_scan(
+        config=two_source_config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        transport=transport,
+    )
+
+    assert "crt.sh" in contacted
+    assert summaries[0].certificates == 3
+    assert summaries[0].by_source == {"crtsh": 3}
+    assert summaries[0].failed_queries == 1
+    assert "certspotter" in summaries[0].errors[0]
+
+
+async def test_every_source_is_asked_under_the_all_strategy(
+    two_source_config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    two_source_config.sources.strategy = "all"
+    transport, contacted = by_host(
+        api_certspotter_com=(200, CERTSPOTTER_PAGE), crt_sh=(200, LISTING)
+    )
+    target = repository.upsert_target(brand="Le Monde", canonical_domain="lemonde.fr")
+    summaries = await run_scan(
+        config=two_source_config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        transport=transport,
+    )
+
+    assert set(contacted) == {"api.certspotter.com", "crt.sh"}
+    assert set(summaries[0].by_source) == {"certspotter", "crtsh"}
+
+
+async def test_repeated_failures_are_summarised_not_repeated(
+    two_source_config: Config, repository: Repository, evidence_store: EvidenceStore
+) -> None:
+    """A scan of five hundred variants must not emit five hundred error lines."""
+
+    transport, _ = by_host(api_certspotter_com=(502, b"down"), crt_sh=(502, b"down"))
+    target = repository.upsert_target(brand="Le Monde", canonical_domain="lemonde.fr")
+    summaries = await run_scan(
+        config=two_source_config,
+        repository=repository,
+        evidence=evidence_store,
+        targets=[target],
+        variants=15,
+        transport=transport,
+    )
+
+    assert summaries[0].failed_queries == 32
+    assert len(summaries[0].errors) <= 5

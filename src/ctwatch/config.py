@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -99,17 +99,27 @@ class CrtShConfig(StrictModel):
     rate_limit_rps: float = 0.5
     timeout_seconds: float = 45.0
     max_attempts: int = 4
+    retry_backoff_seconds: float = 1.0
     cache_ttl_seconds: int = 3600
 
 
 class CertSpotterConfig(StrictModel):
-    enabled: bool = False
+    """Cert Spotter works without a key, at a rate metered per address.
+
+    It is enabled by default because it is markedly more dependable than
+    crt.sh and because it returns certificate fingerprints, which crt.sh's
+    JSON listing does not. Configure a key for any sustained use.
+    """
+
+    enabled: bool = True
     base_url: str = "https://api.certspotter.com"
     api_key_env: str = "CERTSPOTTER_API_KEY"
     rate_limit_rps: float = 1.0
     timeout_seconds: float = 30.0
     max_attempts: int = 4
+    retry_backoff_seconds: float = 1.0
     cache_ttl_seconds: int = 3600
+    max_pages: int = 10
 
     def api_key(self) -> str | None:
         return os.environ.get(self.api_key_env) or None
@@ -123,9 +133,31 @@ class CertStreamConfig(StrictModel):
 
 
 class SourcesConfig(StrictModel):
+    """Which Certificate Transparency services to use, and in what order.
+
+    ``failover`` asks each source in turn and stops at the first that answers,
+    which halves the request budget and keeps a scan working when one service
+    is down — the normal state of affairs for crt.sh. ``all`` asks every
+    enabled source for every query, which costs more and occasionally surfaces
+    a certificate one aggregator has and another does not.
+    """
+
     crtsh: CrtShConfig = Field(default_factory=CrtShConfig)
     certspotter: CertSpotterConfig = Field(default_factory=CertSpotterConfig)
     certstream: CertStreamConfig = Field(default_factory=CertStreamConfig)
+    strategy: Literal["failover", "all"] = "failover"
+    order: list[str] = Field(default_factory=lambda: ["certspotter", "crtsh"])
+
+    @field_validator("order", mode="after")
+    @classmethod
+    def _known_sources(cls, value: list[str]) -> list[str]:
+        known = {"certspotter", "crtsh"}
+        cleaned = [item.strip().lower() for item in value if item.strip()]
+        unknown = [item for item in cleaned if item not in known]
+        if unknown:
+            msg = f"unknown source(s) in `order`: {', '.join(unknown)}"
+            raise ValueError(msg)
+        return cleaned
 
 
 class PermutationsConfig(StrictModel):

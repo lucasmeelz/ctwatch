@@ -51,13 +51,24 @@ scoring:
   review_threshold: 0.5
 
 sources:
+  # Sources are tried in this order and the first one that answers wins.
+  # Cert Spotter comes first: it is more dependable than crt.sh and it returns
+  # certificate fingerprints, which crt.sh's JSON listing does not.
+  order: ["certspotter", "crtsh"]
+  strategy: "failover"   # or "all", to ask every source for every query
+
+  certspotter:
+    enabled: true
+    # Works without a key at a rate metered per address. Set one for any
+    # sustained use: https://sslmate.com/certspotter/
+    api_key_env: "CERTSPOTTER_API_KEY"
+    rate_limit_rps: 1.0
+
   crtsh:
     enabled: true
     rate_limit_rps: 0.5
     timeout_seconds: 45.0
-  certspotter:
-    enabled: false
-    api_key_env: "CERTSPOTTER_API_KEY"
+
   certstream:
     enabled: false
     url: "wss://certstream.calidog.io/"

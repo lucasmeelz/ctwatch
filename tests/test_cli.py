@@ -14,6 +14,8 @@ from ctwatch.timeutil import parse_duration
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LISTING = (FIXTURES / "crtsh_lemonde.json").read_bytes()
+CERTSPOTTER_PAGE1 = (FIXTURES / "certspotter_page1.json").read_bytes()
+CERTSPOTTER_PAGE2 = (FIXTURES / "certspotter_page2.json").read_bytes()
 
 runner = CliRunner()
 
@@ -41,14 +43,26 @@ def offline_scan(monkeypatch: pytest.MonkeyPatch) -> None:
 
     original = cli.run_scan
 
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "api.certspotter.com":
+            # Cert Spotter pages with a cursor: two pages, then an empty one.
+            after = request.url.params.get("after")
+            if after is None:
+                return httpx.Response(200, content=CERTSPOTTER_PAGE1)
+            if after == "16504649787":
+                return httpx.Response(200, content=CERTSPOTTER_PAGE2)
+            return httpx.Response(200, content=b"[]")
+        return httpx.Response(200, content=LISTING)
+
     async def patched(**kwargs: Any) -> Any:
-        kwargs["transport"] = httpx.MockTransport(
-            lambda request: httpx.Response(200, content=LISTING)
-        )
+        kwargs["transport"] = httpx.MockTransport(handler)
         # The shipped configuration throttles crt.sh to one request every two
         # seconds, which is right in production and pointless against a
         # recorded response.
         kwargs["config"].sources.crtsh.rate_limit_rps = 0
+        kwargs["config"].sources.certspotter.rate_limit_rps = 0
+        kwargs["config"].sources.crtsh.retry_backoff_seconds = 0
+        kwargs["config"].sources.certspotter.retry_backoff_seconds = 0
         return await original(**kwargs)
 
     monkeypatch.setattr(cli, "run_scan", patched)
