@@ -70,7 +70,9 @@ def test_a_domain_sharing_a_certificate_with_the_brand_is_treated_as_the_brand(
     """
 
     store = EvidenceStore(tmp_path / "evidence", repository)  # type: ignore[operator]
-    evidence = store.capture(source="certspotter", endpoint="https://api.certspotter.com/", content=b"[]")
+    evidence = store.capture(
+        source="certspotter", endpoint="https://api.certspotter.com/", content=b"[]"
+    )
     certificate = repository.upsert_certificate(source="certspotter", source_ref="1")
 
     for name in ("lemonde.fr", "lemonde-abonnes.fr"):
@@ -93,7 +95,9 @@ def test_an_unrelated_domain_is_not_grouped_with_the_brand(
     repository: Repository, tmp_path: object
 ) -> None:
     store = EvidenceStore(tmp_path / "evidence", repository)  # type: ignore[operator]
-    evidence = store.capture(source="certspotter", endpoint="https://api.certspotter.com/", content=b"[]")
+    evidence = store.capture(
+        source="certspotter", endpoint="https://api.certspotter.com/", content=b"[]"
+    )
     certificate = repository.upsert_certificate(source="certspotter", source_ref="2")
     domain = repository.upsert_domain(name="lemonde-actu.info")
     repository.record_observation(

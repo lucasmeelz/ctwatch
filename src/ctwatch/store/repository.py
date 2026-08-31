@@ -449,6 +449,29 @@ class Repository:
             query=query,
         )
 
+    def names_sharing_certificate(self, domain_id: int) -> list[str]:
+        """Every domain name seen on a certificate this domain also appears on.
+
+        The cheapest ownership signal available: a certificate is issued to
+        someone who proved control of every name on it.
+        """
+
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT other_domain.name AS name
+            FROM observations AS mine
+            JOIN observations AS theirs
+                ON theirs.certificate_id = mine.certificate_id
+            JOIN domains AS other_domain
+                ON other_domain.id = theirs.domain_id
+            WHERE mine.domain_id = ?
+              AND mine.certificate_id IS NOT NULL
+            ORDER BY other_domain.name
+            """,
+            (domain_id,),
+        ).fetchall()
+        return [_text(row, "name") for row in rows]
+
     def count_observations(self, *, target_id: int | None = None) -> int:
         if target_id is None:
             row = self._connection.execute("SELECT COUNT(*) AS total FROM observations").fetchone()
