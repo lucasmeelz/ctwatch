@@ -20,6 +20,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from types import TracebackType
+from typing import Any
 
 import httpx
 
@@ -230,21 +231,25 @@ class PassiveHttpClient:
         ceiling = min(self._backoff_base * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
         return random.uniform(0.0, ceiling)
 
-    async def get(
+    async def _request(
         self,
+        method: str,
         url: str,
         *,
         params: Mapping[str, str | int] | None = None,
         headers: Mapping[str, str] | None = None,
+        json_body: Any = None,
     ) -> FetchResult:
-        """Fetch a URL, retrying transient failures with jittered backoff."""
+        """Send one request, retrying transient failures with jittered backoff."""
 
         last_error: str = "no attempt was made"
         for attempt in range(1, self._max_attempts + 1):
             await self._limiter.wait()
             requested_at = utc_now()
             try:
-                response = await self._client.get(url, params=params, headers=headers)
+                response = await self._client.request(
+                    method, url, params=params, headers=headers, json=json_body
+                )
             except NetworkPolicyError:
                 raise
             except httpx.HTTPError as exc:
@@ -270,3 +275,29 @@ class PassiveHttpClient:
 
         msg = f"giving up on {url} after {self._max_attempts} attempts ({last_error})"
         raise UpstreamError(msg, url=url, attempts=self._max_attempts)
+
+    async def get(
+        self,
+        url: str,
+        *,
+        params: Mapping[str, str | int] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> FetchResult:
+        """Fetch a URL, retrying transient failures with jittered backoff."""
+
+        return await self._request("GET", url, params=params, headers=headers)
+
+    async def post_json(
+        self,
+        url: str,
+        *,
+        payload: Any,
+        headers: Mapping[str, str] | None = None,
+    ) -> FetchResult:
+        """Send a JSON body to a declared endpoint.
+
+        The only outbound write in the project, and it goes through the same
+        host allowlist as every read.
+        """
+
+        return await self._request("POST", url, headers=headers, json_body=payload)
