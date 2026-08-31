@@ -1,0 +1,39 @@
+ctwatch
+Copyright (c) 2026 Lucas Deschamps
+Licensed under the MIT License. See LICENSE.
+
+This project vendors two third-party data files. Neither is modified beyond the
+reduction described below, and both can be regenerated from their source with
+the scripts in scripts/.
+
+--------------------------------------------------------------------------------
+
+Unicode Security Mechanisms (UTS #39) — confusables.txt
+Source: https://www.unicode.org/Public/security/latest/confusables.txt
+Copyright (c) 1991-2025 Unicode, Inc. All rights reserved.
+Terms of use: https://www.unicode.org/terms_of_use.html
+
+Vendored as: src/ctwatch/data/confusables_ascii.tsv
+Regenerate with: scripts/refresh_confusables.py
+
+The vendored file is a reduction, not a copy. It retains only mappings whose
+target is a single character usable in a domain name, and only those source
+characters that survive UTS #46 processing as a distinct registration. The
+upstream file is approximately 700 kB; the reduction is approximately 30 kB.
+
+Unicode and the Unicode Logo are registered trademarks of Unicode, Inc. in the
+United States and other countries.
+
+--------------------------------------------------------------------------------
+
+Public Suffix List
+Source: https://publicsuffix.org/list/public_suffix_list.dat
+Licensed under the Mozilla Public License, v. 2.0.
+A copy of the MPL 2.0 is available at https://mozilla.org/MPL/2.0/.
+
+Vendored as: src/ctwatch/data/public_suffix_list.dat
+Regenerate with: scripts/refresh_public_suffix_list.py
+
+The file is vendored verbatim. It is used to determine which part of a domain
+name was registered by someone, which decides which characters the permutation
+engine is allowed to mutate.

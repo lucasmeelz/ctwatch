@@ -1,0 +1,41 @@
+name: False positive or missed domain
+description: A finding that should not be there, or one that should have been.
+labels: ["detection"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Detection quality is the point of this project, so these reports are
+        genuinely useful. Only include domains you are comfortable publishing.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which is it
+      options:
+        - A domain was reported that should not have been
+        - A domain was not reported that should have been
+    validations:
+      required: true
+  - type: input
+    id: watched
+    attributes:
+      label: The watched domain
+      placeholder: lemonde.fr
+    validations:
+      required: true
+  - type: input
+    id: found
+    attributes:
+      label: The domain in question
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is wrong
+      description: >
+        For a false positive, the score breakdown from `ctwatch findings --json`
+        is the most useful thing you can paste. For a missed domain, say how you
+        think it should have been reached.
+    validations:
+      required: true
