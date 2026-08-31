@@ -525,6 +525,47 @@ class Repository:
         ).fetchall()
         return [int(row["evidence_id"]) for row in rows]
 
+    def evidence_for_domain(self, domain_id: int) -> list[EvidenceRecord]:
+        """Every archived response this domain was seen in, oldest first."""
+
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT evidence.* FROM evidence
+            JOIN observations ON observations.evidence_id = evidence.id
+            WHERE observations.domain_id = ?
+            ORDER BY evidence.requested_at, evidence.id
+            """,
+            (domain_id,),
+        ).fetchall()
+        return [_evidence(row) for row in rows]
+
+    def certificates_for_domain(self, domain_id: int) -> list[CertificateRecord]:
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT certificates.* FROM certificates
+            JOIN observations ON observations.certificate_id = certificates.id
+            WHERE observations.domain_id = ?
+            ORDER BY COALESCE(certificates.not_before, certificates.entry_timestamp) DESC
+            """,
+            (domain_id,),
+        ).fetchall()
+        return [_certificate(row) for row in rows]
+
+    def observations_for_domain(self, domain_id: int) -> list[sqlite3.Row]:
+        return list(
+            self._connection.execute(
+                """
+                SELECT observations.*, evidence.endpoint AS endpoint,
+                       evidence.content_sha256 AS content_sha256
+                FROM observations
+                JOIN evidence ON evidence.id = observations.evidence_id
+                WHERE observations.domain_id = ?
+                ORDER BY observations.observed_at
+                """,
+                (domain_id,),
+            )
+        )
+
     def upsert_finding(
         self,
         *,
