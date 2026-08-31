@@ -226,3 +226,48 @@ def test_scan_can_look_up_generated_variants(workspace: Path, offline_scan: None
     data = payload(invoke("--json", "scan", "--target", "lemonde.fr", "--variants", "5"))
     assert data[0]["variants_queried"] == 5
     assert data[0]["queries"] == 6
+
+
+def test_findings_are_listed_after_a_scan(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+
+    data = payload(invoke("--json", "findings", "--target", "lemonde.fr", "--min-score", "0"))
+    assert data
+    names = {entry["domain"] for entry in data}
+    assert "lemonde-actu.info" in names
+
+    top = max(data, key=lambda entry: entry["score"])
+    assert top["confidence"]
+    assert top["why"]
+    assert top["breakdown"]["contributions"]
+
+
+def test_scan_reports_what_it_found_and_what_it_suppressed(
+    workspace: Path, offline_scan: None
+) -> None:
+    invoke("--json", "init")
+    data = payload(invoke("--json", "scan", "--target", "lemonde.fr"))
+    assert data[0]["findings"]["assessed"] > 0
+
+
+def test_findings_hides_suppressed_entries_by_default(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+
+    shown = payload(invoke("--json", "findings", "--min-score", "0"))
+    everything = payload(invoke("--json", "findings", "--min-score", "0", "--all"))
+    assert len(everything) >= len(shown)
+    assert all(entry["status"] != "allowlisted" for entry in shown)
+
+
+def test_findings_rejects_an_unknown_target(workspace: Path) -> None:
+    invoke("--json", "init")
+    result = invoke("--json", "findings", "--target", "unknown-outlet.fr")
+    assert result.exit_code == 1
+    assert "not on the watchlist" in payload(result)["error"]
+
+
+def test_findings_on_an_empty_database_is_not_an_error(workspace: Path) -> None:
+    invoke("--json", "init")
+    assert payload(invoke("--json", "findings")) == []

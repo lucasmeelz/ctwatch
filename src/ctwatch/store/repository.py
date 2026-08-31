@@ -482,6 +482,166 @@ class Repository:
         return int(row["total"])
 
     # ------------------------------------------------------------------
+    # Findings
+
+    def domains_for_target(self, target_id: int) -> list[DomainRecord]:
+        """Every domain observed while scanning this target."""
+
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT domains.* FROM domains
+            JOIN observations ON observations.domain_id = domains.id
+            WHERE observations.target_id = ?
+            ORDER BY domains.name
+            """,
+            (target_id,),
+        ).fetchall()
+        return [_domain(row) for row in rows]
+
+    def newest_certificate_for_domain(self, domain_id: int) -> CertificateRecord | None:
+        """The most recently issued certificate covering this domain.
+
+        Recency is the point: an operation being set up now is what matters,
+        and an old certificate on the same name says little about it.
+        """
+
+        row = self._connection.execute(
+            """
+            SELECT certificates.* FROM certificates
+            JOIN observations ON observations.certificate_id = certificates.id
+            WHERE observations.domain_id = ?
+            ORDER BY COALESCE(certificates.not_before, certificates.entry_timestamp) DESC
+            LIMIT 1
+            """,
+            (domain_id,),
+        ).fetchone()
+        return None if row is None else _certificate(row)
+
+    def evidence_ids_for_domain(self, domain_id: int) -> list[int]:
+        rows = self._connection.execute(
+            "SELECT DISTINCT evidence_id FROM observations "
+            "WHERE domain_id = ? ORDER BY evidence_id",
+            (domain_id,),
+        ).fetchall()
+        return [int(row["evidence_id"]) for row in rows]
+
+    def upsert_finding(
+        self,
+        *,
+        target_id: int,
+        domain_id: int,
+        score: float,
+        breakdown: dict[str, Any],
+        confidence: str | None = None,
+        status: str = "new",
+        notes: str | None = None,
+    ) -> int:
+        """Record an assessment, preserving a status a human has already set."""
+
+        moment = to_iso(utc_now())
+        self._connection.execute(
+            """
+            INSERT INTO findings (
+                target_id, domain_id, score, breakdown, confidence, status, notes,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (target_id, domain_id) DO UPDATE SET
+                score = excluded.score,
+                breakdown = excluded.breakdown,
+                confidence = excluded.confidence,
+                -- A note a person wrote survives a rescan that has none.
+                notes = COALESCE(excluded.notes, findings.notes),
+                updated_at = excluded.updated_at,
+                -- A verdict a person recorded is not overwritten by a rescan.
+                status = CASE
+                    WHEN findings.status IN ('reviewing', 'confirmed', 'dismissed')
+                        THEN findings.status
+                    ELSE excluded.status
+                END
+            """,
+            (
+                target_id,
+                domain_id,
+                score,
+                json.dumps(breakdown, sort_keys=True),
+                confidence,
+                status,
+                notes,
+                moment,
+                moment,
+            ),
+        )
+        row = self._connection.execute(
+            "SELECT id FROM findings WHERE target_id = ? AND domain_id = ?",
+            (target_id, domain_id),
+        ).fetchone()
+        if row is None:  # pragma: no cover
+            msg = "finding vanished right after being written"
+            raise RuntimeError(msg)
+        return int(row["id"])
+
+    def list_findings(
+        self,
+        *,
+        target_id: int | None = None,
+        min_score: float = 0.0,
+        include_allowlisted: bool = False,
+        statuses: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[sqlite3.Row]:
+        """Findings joined to the names and brands a report needs to show."""
+
+        clauses = ["findings.score >= ?"]
+        params: list[Any] = [min_score]
+
+        if target_id is not None:
+            clauses.append("findings.target_id = ?")
+            params.append(target_id)
+        if not include_allowlisted:
+            clauses.append("findings.status != 'allowlisted'")
+        if statuses:
+            placeholders = ", ".join("?" for _ in statuses)
+            clauses.append(f"findings.status IN ({placeholders})")
+            params.extend(statuses)
+
+        query = f"""
+            SELECT
+                findings.*,
+                domains.name AS domain_name,
+                domains.unicode_name AS domain_unicode_name,
+                domains.is_idn AS domain_is_idn,
+                watch_targets.brand AS brand,
+                watch_targets.canonical_domain AS canonical_domain
+            FROM findings
+            JOIN domains ON domains.id = findings.domain_id
+            JOIN watch_targets ON watch_targets.id = findings.target_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY findings.score DESC, domains.name
+        """
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+
+        return list(self._connection.execute(query, params))
+
+    def count_findings(self, *, target_id: int | None = None) -> int:
+        if target_id is None:
+            row = self._connection.execute("SELECT COUNT(*) AS total FROM findings").fetchone()
+        else:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS total FROM findings WHERE target_id = ?", (target_id,)
+            ).fetchone()
+        return int(row["total"])
+
+    def set_finding_status(self, finding_id: int, status: str, *, notes: str | None = None) -> bool:
+        cursor = self._connection.execute(
+            "UPDATE findings SET status = ?, notes = COALESCE(?, notes), updated_at = ? "
+            "WHERE id = ?",
+            (status, notes, to_iso(utc_now()), finding_id),
+        )
+        return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
     # Source cache
 
     def cached_evidence(self, *, source: str, cache_key: str) -> EvidenceRecord | None:

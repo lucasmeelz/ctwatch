@@ -19,6 +19,7 @@ from rich.table import Table
 
 from ctwatch import __version__
 from ctwatch.config import DEFAULT_CONFIG_FILENAME, Config, ConfigError, load_config
+from ctwatch.findings import assess_targets
 from ctwatch.names import InvalidDomainNameError, normalize
 from ctwatch.net.client import NetworkPolicyError
 from ctwatch.net.policy import allowed_hosts
@@ -274,6 +275,25 @@ def target_list(
     _emit(state, [_target_payload(target) for target in targets], render)
 
 
+def _finding_payload(row: Any) -> dict[str, Any]:
+    breakdown: dict[str, Any] = json.loads(row["breakdown"] or "{}")
+    contributions = breakdown.get("contributions", [])
+    strongest = max(contributions, key=lambda item: item.get("weighted", 0.0), default=None)
+    return {
+        "id": int(row["id"]),
+        "brand": row["brand"],
+        "target": row["canonical_domain"],
+        "domain": row["domain_name"],
+        "display_name": row["domain_unicode_name"] or row["domain_name"],
+        "idn": bool(row["domain_is_idn"]),
+        "score": float(row["score"]),
+        "confidence": row["confidence"],
+        "status": row["status"],
+        "why": (strongest or {}).get("explanation", ""),
+        "breakdown": breakdown,
+    }
+
+
 def _permutation_payload(permutation: Permutation) -> dict[str, Any]:
     return {
         "name": permutation.name.ascii_name,
@@ -366,6 +386,95 @@ def permutations(
 
 
 @app.command()
+def findings(
+    ctx: typer.Context,
+    target: Annotated[
+        str | None, typer.Option("--target", help="Restrict to one watched domain.")
+    ] = None,
+    min_score: Annotated[
+        float | None,
+        typer.Option("--min-score", help="Only show findings at or above this score."),
+    ] = None,
+    status: Annotated[
+        list[str] | None,
+        typer.Option("--status", help="Restrict to a review status. Repeatable."),
+    ] = None,
+    include_allowlisted: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Also show domains suppressed as belonging to the watched brand.",
+        ),
+    ] = False,
+    limit: Annotated[int | None, typer.Option("--limit", help="Stop after this many.")] = None,
+    recompute: Annotated[
+        bool,
+        typer.Option(
+            "--recompute/--no-recompute",
+            help="Re-score stored observations first. Contacts nothing.",
+        ),
+    ] = True,
+) -> None:
+    """List assessed findings, highest score first."""
+
+    state = _state(ctx)
+    config = _load(state)
+    threshold = config.scoring.review_threshold if min_score is None else min_score
+
+    with open_database(config.storage.database) as connection:
+        repository = Repository(connection)
+        sync_targets_from_config(repository, config)
+
+        available = repository.list_targets()
+        selected = available
+        if target is not None:
+            wanted = normalize(target).ascii_name
+            selected = [item for item in available if item.canonical_domain == wanted]
+            if not selected:
+                _fail(f"not on the watchlist: {wanted}", state=state)
+                return
+
+        if recompute:
+            assess_targets(repository=repository, config=config, targets=selected)
+
+        rows = repository.list_findings(
+            target_id=selected[0].id if target is not None else None,
+            min_score=threshold,
+            include_allowlisted=include_allowlisted,
+            statuses=[item.strip().lower() for item in status] if status else None,
+            limit=limit,
+        )
+        results = [_finding_payload(row) for row in rows]
+
+    def render() -> None:
+        if not results:
+            console.print(
+                f"[dim]no finding at or above {threshold:.2f}; "
+                "try --min-score 0, or scan with --variants[/dim]"
+            )
+            return
+        table = Table(title="Findings", title_justify="left")
+        table.add_column("Score", justify="right")
+        table.add_column("Conf.")
+        table.add_column("Domain")
+        table.add_column("As displayed")
+        table.add_column("Brand")
+        table.add_column("Why")
+        for entry in results:
+            table.add_row(
+                f"{entry['score']:.2f}",
+                entry["confidence"] or "-",
+                entry["domain"],
+                entry["display_name"] if entry["idn"] else "",
+                entry["brand"],
+                entry["why"],
+            )
+        console.print(table)
+
+    _emit(state, results, render)
+
+
+@app.command()
 def scan(
     ctx: typer.Context,
     target: Annotated[
@@ -442,6 +551,18 @@ def scan(
             _fail(str(exc), state=state)
             return
 
+        # Scoring reads what the scan just stored and contacts nothing, so it
+        # is always worth doing straight away.
+        reports = {
+            report.target.canonical_domain: report.as_dict()
+            for report in assess_targets(repository=repository, config=config, targets=selected)
+        }
+        payloads = []
+        for summary in summaries:
+            entry = summary.as_dict()
+            entry["findings"] = reports.get(summary.canonical_domain, {})
+            payloads.append(entry)
+
     def render() -> None:
         table = Table(title="Scan", title_justify="left")
         table.add_column("Brand")
@@ -450,7 +571,10 @@ def scan(
         table.add_column("Certificates", justify="right")
         table.add_column("Names", justify="right")
         table.add_column("New", justify="right")
+        table.add_column("To review", justify="right")
+        table.add_column("Suppressed", justify="right")
         for summary in summaries:
+            report = reports.get(summary.canonical_domain, {})
             table.add_row(
                 summary.brand,
                 summary.canonical_domain,
@@ -458,6 +582,8 @@ def scan(
                 str(summary.certificates),
                 str(summary.domains_seen),
                 str(summary.new_domains),
+                str(report.get("above_threshold", 0)),
+                str(report.get("suppressed", 0)),
             )
         console.print(table)
         for summary in summaries:
@@ -471,7 +597,7 @@ def scan(
                 "`ctwatch permutations <domain>` to see them first.[/dim]"
             )
 
-    _emit(state, [summary.as_dict() for summary in summaries], render)
+    _emit(state, payloads, render)
 
 
 if __name__ == "__main__":  # pragma: no cover
