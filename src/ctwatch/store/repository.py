@@ -624,6 +624,46 @@ class Repository:
 
         return list(self._connection.execute(query, params))
 
+    def get_finding(self, finding_id: int) -> sqlite3.Row | None:
+        row: sqlite3.Row | None = self._connection.execute(
+            """
+            SELECT findings.*, domains.name AS domain_name
+            FROM findings
+            JOIN domains ON domains.id = findings.domain_id
+            WHERE findings.id = ?
+            """,
+            (finding_id,),
+        ).fetchone()
+        return row
+
+    def get_domain_by_id(self, domain_id: int) -> DomainRecord | None:
+        row = self._connection.execute(
+            "SELECT * FROM domains WHERE id = ?", (domain_id,)
+        ).fetchone()
+        return None if row is None else _domain(row)
+
+    def domains_for_findings(
+        self, *, target_id: int | None = None, min_score: float = 0.0, limit: int | None = None
+    ) -> list[DomainRecord]:
+        """Domains worth enriching: reported findings, highest score first."""
+
+        clauses = ["findings.score >= ?", "findings.status != 'allowlisted'"]
+        params: list[Any] = [min_score]
+        if target_id is not None:
+            clauses.append("findings.target_id = ?")
+            params.append(target_id)
+
+        query = f"""
+            SELECT domains.* FROM findings
+            JOIN domains ON domains.id = findings.domain_id
+            WHERE {" AND ".join(clauses)}
+            ORDER BY findings.score DESC, domains.name
+        """
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
+        return [_domain(row) for row in self._connection.execute(query, params)]
+
     def count_findings(self, *, target_id: int | None = None) -> int:
         if target_id is None:
             row = self._connection.execute("SELECT COUNT(*) AS total FROM findings").fetchone()
@@ -640,6 +680,198 @@ class Repository:
             (status, notes, to_iso(utc_now()), finding_id),
         )
         return cursor.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Enrichment
+
+    def upsert_registration(
+        self,
+        *,
+        domain_id: int,
+        evidence_id: int,
+        rdap_server: str | None,
+        registrar: str | None,
+        registered_at: datetime | None,
+        expires_at: datetime | None,
+        last_changed_at: datetime | None,
+        statuses: list[str] | tuple[str, ...] = (),
+        nameservers: list[str] | tuple[str, ...] = (),
+        retrieved_at: datetime | None = None,
+    ) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO registrations (
+                domain_id, evidence_id, rdap_server, registrar, registered_at,
+                expires_at, last_changed_at, statuses, nameservers, retrieved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (domain_id) DO UPDATE SET
+                evidence_id = excluded.evidence_id,
+                rdap_server = excluded.rdap_server,
+                registrar = excluded.registrar,
+                registered_at = excluded.registered_at,
+                expires_at = excluded.expires_at,
+                last_changed_at = excluded.last_changed_at,
+                statuses = excluded.statuses,
+                nameservers = excluded.nameservers,
+                retrieved_at = excluded.retrieved_at
+            """,
+            (
+                domain_id,
+                evidence_id,
+                rdap_server,
+                registrar,
+                None if registered_at is None else to_iso(registered_at),
+                None if expires_at is None else to_iso(expires_at),
+                None if last_changed_at is None else to_iso(last_changed_at),
+                json.dumps(list(statuses)),
+                json.dumps(list(nameservers)),
+                to_iso(retrieved_at or utc_now()),
+            ),
+        )
+
+    def get_registration(self, domain_id: int) -> sqlite3.Row | None:
+        row: sqlite3.Row | None = self._connection.execute(
+            "SELECT * FROM registrations WHERE domain_id = ?", (domain_id,)
+        ).fetchone()
+        return row
+
+    def record_dns_record(
+        self,
+        *,
+        domain_id: int,
+        evidence_id: int,
+        record_type: str,
+        value: str,
+        ttl: int | None = None,
+        observed_at: datetime | None = None,
+    ) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO dns_records (
+                domain_id, evidence_id, record_type, value, ttl, observed_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT (domain_id, record_type, value) DO UPDATE SET
+                evidence_id = excluded.evidence_id,
+                ttl = excluded.ttl,
+                observed_at = excluded.observed_at
+            """,
+            (
+                domain_id,
+                evidence_id,
+                record_type,
+                value,
+                ttl,
+                to_iso(observed_at or utc_now()),
+            ),
+        )
+
+    def dns_records_for(self, domain_id: int) -> list[sqlite3.Row]:
+        return list(
+            self._connection.execute(
+                "SELECT * FROM dns_records WHERE domain_id = ? ORDER BY record_type, value",
+                (domain_id,),
+            )
+        )
+
+    def upsert_url_scan(
+        self,
+        *,
+        domain_id: int,
+        evidence_id: int,
+        scan_uuid: str | None,
+        result_url: str | None = None,
+        screenshot_url: str | None = None,
+        page_ip: str | None = None,
+        page_asn: str | None = None,
+        page_asn_name: str | None = None,
+        page_server: str | None = None,
+        page_title: str | None = None,
+        scanned_at: datetime | None = None,
+        retrieved_at: datetime | None = None,
+    ) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO url_scans (
+                domain_id, evidence_id, scan_uuid, result_url, screenshot_url,
+                page_ip, page_asn, page_asn_name, page_server, page_title,
+                scanned_at, retrieved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (domain_id, scan_uuid) DO UPDATE SET
+                evidence_id = excluded.evidence_id,
+                result_url = excluded.result_url,
+                screenshot_url = excluded.screenshot_url,
+                page_ip = excluded.page_ip,
+                page_asn = excluded.page_asn,
+                page_asn_name = excluded.page_asn_name,
+                page_server = excluded.page_server,
+                page_title = excluded.page_title,
+                scanned_at = excluded.scanned_at,
+                retrieved_at = excluded.retrieved_at
+            """,
+            (
+                domain_id,
+                evidence_id,
+                scan_uuid,
+                result_url,
+                screenshot_url,
+                page_ip,
+                page_asn,
+                page_asn_name,
+                page_server,
+                page_title,
+                None if scanned_at is None else to_iso(scanned_at),
+                to_iso(retrieved_at or utc_now()),
+            ),
+        )
+
+    def url_scans_for(self, domain_id: int) -> list[sqlite3.Row]:
+        return list(
+            self._connection.execute(
+                "SELECT * FROM url_scans WHERE domain_id = ? ORDER BY scanned_at DESC",
+                (domain_id,),
+            )
+        )
+
+    # ------------------------------------------------------------------
+    # Pivots
+
+    def domains_sharing_dns_value(self, record_type: str, value: str) -> list[str]:
+        """Every domain resolving to the same address, nameserver or exchange."""
+
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT domains.name AS name FROM dns_records
+            JOIN domains ON domains.id = dns_records.domain_id
+            WHERE dns_records.record_type = ? AND dns_records.value = ?
+            ORDER BY domains.name
+            """,
+            (record_type, value),
+        ).fetchall()
+        return [_text(row, "name") for row in rows]
+
+    def domains_sharing_asn(self, asn: str) -> list[str]:
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT domains.name AS name FROM url_scans
+            JOIN domains ON domains.id = url_scans.domain_id
+            WHERE url_scans.page_asn = ?
+            ORDER BY domains.name
+            """,
+            (asn,),
+        ).fetchall()
+        return [_text(row, "name") for row in rows]
+
+    def domains_sharing_registrar(self, registrar: str) -> list[str]:
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT domains.name AS name FROM registrations
+            JOIN domains ON domains.id = registrations.domain_id
+            WHERE registrations.registrar = ?
+            ORDER BY domains.name
+            """,
+            (registrar,),
+        ).fetchall()
+        return [_text(row, "name") for row in rows]
 
     # ------------------------------------------------------------------
     # Source cache

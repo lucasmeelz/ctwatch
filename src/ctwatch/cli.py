@@ -19,6 +19,7 @@ from rich.table import Table
 
 from ctwatch import __version__
 from ctwatch.config import DEFAULT_CONFIG_FILENAME, Config, ConfigError, load_config
+from ctwatch.enrichment import enrich_domains
 from ctwatch.findings import assess_targets
 from ctwatch.names import InvalidDomainNameError, normalize
 from ctwatch.net.client import NetworkPolicyError
@@ -383,6 +384,130 @@ def permutations(
         console.print(f"[dim]{len(produced)} candidate(s); nothing was contacted[/dim]")
 
     _emit(state, [_permutation_payload(permutation) for permutation in produced], render)
+
+
+@app.command()
+def enrich(
+    ctx: typer.Context,
+    finding_id: Annotated[
+        int | None, typer.Option("--finding-id", help="Enrich the domain behind one finding.")
+    ] = None,
+    domain: Annotated[
+        list[str] | None,
+        typer.Option("--domain", help="Enrich a specific domain. Repeatable."),
+    ] = None,
+    target: Annotated[
+        str | None, typer.Option("--target", help="Restrict to one watched domain.")
+    ] = None,
+    min_score: Annotated[
+        float | None,
+        typer.Option("--min-score", help="Only enrich findings at or above this score."),
+    ] = None,
+    limit: Annotated[int, typer.Option("--limit", help="Stop after this many domains.")] = 10,
+) -> None:
+    """Add registration, resolution and third-party rendering to findings.
+
+    Every step asks somebody about the domain — the registry, a public
+    resolver, urlscan.io. None of them contacts the domain itself.
+    """
+
+    state = _state(ctx)
+    config = _load(state)
+    threshold = config.scoring.review_threshold if min_score is None else min_score
+    config.storage.evidence_dir.mkdir(parents=True, exist_ok=True)
+
+    with open_database(config.storage.database) as connection:
+        repository = Repository(connection)
+        sync_targets_from_config(repository, config)
+
+        records = []
+        if finding_id is not None:
+            row = repository.get_finding(finding_id)
+            if row is None:
+                _fail(f"no finding with id {finding_id}", state=state)
+                return
+            found = repository.get_domain_by_id(int(row["domain_id"]))
+            if found is not None:
+                records.append(found)
+        elif domain:
+            for entry in domain:
+                try:
+                    wanted = normalize(entry).ascii_name
+                except InvalidDomainNameError as exc:
+                    _fail(str(exc), state=state)
+                    return
+                found = repository.get_domain(wanted)
+                if found is None:
+                    _fail(f"never observed, so there is nothing to enrich: {wanted}", state=state)
+                    return
+                records.append(found)
+        else:
+            target_id = None
+            if target is not None:
+                wanted = normalize(target).ascii_name
+                matches = [t for t in repository.list_targets() if t.canonical_domain == wanted]
+                if not matches:
+                    _fail(f"not on the watchlist: {wanted}", state=state)
+                    return
+                target_id = matches[0].id
+            records = repository.domains_for_findings(
+                target_id=target_id, min_score=threshold, limit=limit
+            )
+
+        if not records:
+            _fail(
+                "nothing to enrich; scan first, or lower --min-score",
+                state=state,
+            )
+            return
+
+        evidence = EvidenceStore(config.storage.evidence_dir, repository)
+        try:
+            results = asyncio.run(
+                enrich_domains(
+                    config=config,
+                    repository=repository,
+                    evidence=evidence,
+                    domains=records,
+                )
+            )
+        except NetworkPolicyError as exc:
+            _fail(str(exc), state=state)
+            return
+
+    def render() -> None:
+        for result in results:
+            console.print(f"[bold]{result.domain.display_name}[/bold]")
+            registration = result.registration
+            if registration is not None:
+                registered = (
+                    registration.registered_at.date().isoformat()
+                    if registration.registered_at
+                    else "unknown"
+                )
+                console.print(
+                    f"  registered  {registered}  via "
+                    f"{registration.registrar or 'unknown registrar'}"
+                )
+                if registration.statuses:
+                    console.print(f"  status      {', '.join(registration.statuses)}")
+            if result.resolution is not None:
+                addresses = ", ".join(result.resolution.addresses) or "does not resolve"
+                console.print(f"  resolves to {addresses}")
+                nameservers = result.resolution.of_type("NS")
+                if nameservers:
+                    console.print(f"  nameservers {', '.join(nameservers)}")
+            for scan in result.scans[:3]:
+                console.print(f"  rendered    {scan.result_url} ({scan.page_asn_name or '?'})")
+            for pivot in result.pivots[:5]:
+                shared = ", ".join(pivot.domains[:4])
+                more = "" if pivot.size <= 4 else f" and {pivot.size - 4} more"
+                console.print(f"  [cyan]pivot[/cyan] {pivot.description}: {shared}{more}")
+            for message in result.errors:
+                error_console.print(f"  [yellow]{message}[/yellow]")
+            console.print()
+
+    _emit(state, [result.as_dict() for result in results], render)
 
 
 @app.command()

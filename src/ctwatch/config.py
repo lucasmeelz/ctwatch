@@ -217,6 +217,61 @@ class PermutationsConfig(StrictModel):
         return [item.strip().lower().lstrip(".") for item in value if item.strip()]
 
 
+class DnsConfig(StrictModel):
+    """Name resolution, over HTTPS.
+
+    Resolving a suspicious name is not contacting it, but a plaintext query
+    tells whoever is on the path which names an analyst is looking at. DNS over
+    HTTPS removes that leak and keeps the answer archivable as evidence.
+    """
+
+    enabled: bool = True
+    resolver_url: str = "https://cloudflare-dns.com/dns-query"
+    record_types: list[str] = Field(default_factory=lambda: ["A", "AAAA", "NS", "MX"])
+    rate_limit_rps: float = 5.0
+
+    @field_validator("record_types", mode="after")
+    @classmethod
+    def _normalize(cls, value: list[str]) -> list[str]:
+        return [item.strip().upper() for item in value if item.strip()]
+
+
+class RdapConfig(StrictModel):
+    """Registration data, read from the registry.
+
+    RDAP servers cannot be listed in advance — several hundred registries each
+    run their own — so the hosts are learned from IANA's bootstrap document at
+    run time and recorded as having come from there.
+    """
+
+    enabled: bool = True
+    bootstrap_url: str = "https://data.iana.org/rdap/dns.json"
+    rate_limit_rps: float = 1.0
+
+
+class UrlscanConfig(StrictModel):
+    """Third-party rendering of suspicious pages.
+
+    Searching urlscan's archive reveals nothing and needs no key. Submitting a
+    page for scanning is a different act — it is a real visit, and a public
+    submission is visible to the operator — so it is not done here.
+    """
+
+    enabled: bool = True
+    api_key_env: str = "URLSCAN_API_KEY"
+    limit: int = 10
+    rate_limit_rps: float = 0.5
+
+    def api_key(self) -> str | None:
+        return os.environ.get(self.api_key_env) or None
+
+
+class EnrichConfig(StrictModel):
+    dns: DnsConfig = Field(default_factory=DnsConfig)
+    rdap: RdapConfig = Field(default_factory=RdapConfig)
+    urlscan: UrlscanConfig = Field(default_factory=UrlscanConfig)
+
+
 class StorageConfig(StrictModel):
     database: Path = Path("ctwatch.db")
     evidence_dir: Path = Path("evidence")
@@ -245,6 +300,7 @@ class Config(StrictModel):
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     sources: SourcesConfig = Field(default_factory=SourcesConfig)
     permutations: PermutationsConfig = Field(default_factory=PermutationsConfig)
+    enrich: EnrichConfig = Field(default_factory=EnrichConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     network: NetworkConfig = Field(default_factory=NetworkConfig)
 

@@ -1,0 +1,7 @@
+{
+  "Status": 0,
+  "Answer": [
+    {"name": "lemonde-actu.info.", "type": 2, "TTL": 3600, "data": "ns1.cheap-hosting.example."},
+    {"name": "lemonde-actu.info.", "type": 2, "TTL": 3600, "data": "ns2.cheap-hosting.example."}
+  ]
+}

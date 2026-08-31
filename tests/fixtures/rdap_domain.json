@@ -1,0 +1,29 @@
+{
+  "objectClassName": "domain",
+  "handle": "DOM-EXAMPLE",
+  "ldhName": "lemonde-actu.info",
+  "status": ["client transfer prohibited"],
+  "events": [
+    {"eventAction": "registration", "eventDate": "2026-03-01T09:14:00Z"},
+    {"eventAction": "expiration", "eventDate": "2027-03-01T09:14:00Z"},
+    {"eventAction": "last changed", "eventDate": "2026-03-05T11:02:00Z"}
+  ],
+  "nameservers": [
+    {"objectClassName": "nameserver", "ldhName": "ns1.cheap-hosting.example."},
+    {"objectClassName": "nameserver", "ldhName": "ns2.cheap-hosting.example."}
+  ],
+  "entities": [
+    {
+      "objectClassName": "entity",
+      "handle": "1234",
+      "roles": ["registrar"],
+      "vcardArray": [
+        "vcard",
+        [
+          ["version", {}, "text", "4.0"],
+          ["fn", {}, "text", "Budget Registrar Ltd"]
+        ]
+      ]
+    }
+  ]
+}

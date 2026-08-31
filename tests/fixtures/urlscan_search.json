@@ -1,0 +1,18 @@
+{
+  "results": [
+    {
+      "_id": "01930000-aaaa-bbbb-cccc-000000000001",
+      "result": "https://urlscan.io/result/01930000-aaaa-bbbb-cccc-000000000001/",
+      "screenshot": "https://urlscan.io/screenshots/01930000-aaaa-bbbb-cccc-000000000001.png",
+      "task": {"time": "2026-03-09T08:30:00.000Z", "url": "https://lemonde-actu.info/"},
+      "page": {
+        "ip": "203.0.113.42",
+        "asn": "AS64500",
+        "asnname": "EXAMPLE-HOSTING",
+        "server": "nginx",
+        "title": "Le Monde - Actualites"
+      }
+    }
+  ],
+  "total": 1
+}
