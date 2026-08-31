@@ -391,7 +391,14 @@ def load_config(path: Path | None = None) -> Config:
 
     resolved = path or default_config_path()
     if not resolved.is_file():
-        msg = f"configuration file not found: {resolved}. Run `ctwatch init` first."
+        # State is per-directory, like a repository. Saying only "run init"
+        # sends people to a command they may already have run somewhere else.
+        msg = (
+            f"no configuration at {resolved.resolve()}. ctwatch keeps its "
+            "configuration, database and evidence in the directory you run it "
+            "from. Run `ctwatch init` here to start a new one, or use "
+            "`--config` to point at an existing one."
+        )
         raise ConfigError(msg)
 
     try:

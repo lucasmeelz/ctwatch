@@ -28,7 +28,11 @@ uv run ctwatch findings
 ```
 
 `init` writes a configuration file, a database and an evidence directory, and
-prints every host the tool is allowed to contact. `scan` asks the Certificate
+prints every host the tool is allowed to contact. Those three live in the
+directory you run it from, the way a repository does — so run `init` in the
+folder where you want to keep the investigation, not necessarily in the source
+tree. Every later command reads them from the current directory, or from
+wherever `--config` points. `scan` asks the Certificate
 Transparency aggregators about the watched names and the generated variants.
 `findings` lists what came back, scored and explained.
 
@@ -130,6 +134,8 @@ Every command accepts `--json`, so the tool can sit inside someone else's
 pipeline. The table output is the convenience; the JSON is the contract.
 
 ### The dashboard
+
+From the directory holding your `ctwatch.yaml`:
 
 ```
 uv run ctwatch dashboard --min-score 0 --all --out dashboard.html --open

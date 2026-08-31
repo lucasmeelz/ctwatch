@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The error raised when no configuration is found now says where ctwatch
+  looked and that its state is per-directory. Telling someone to run `init`
+  is unhelpful when they have already run it somewhere else.
+
 ## [0.1.0] — 2026-08-31
 
 First release.

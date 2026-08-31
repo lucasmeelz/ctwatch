@@ -22,6 +22,8 @@ htmlcov/
 ctwatch.yaml
 evidence/
 exports/
+dashboard.html
+*.report.md
 .cache/
 
 # Secrets
