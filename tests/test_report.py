@@ -389,3 +389,72 @@ def test_a_missing_archive_is_reported_not_hidden(
     assert result.responses == 0
     assert result.missing
     assert "missing" in result.missing[0]
+
+
+# ----------------------------------------------------------------------------
+# The dashboard
+
+
+def test_the_dashboard_is_one_self_contained_file(repository: Repository, finding_id: int) -> None:
+    """It has to open from a filesystem, with no server and no network."""
+
+    from ctwatch.report.html import render_dashboard
+
+    document = render_dashboard(dossiers_for_target(repository, min_score=0.0))
+    assert document.startswith("<!DOCTYPE html>")
+    assert "<style>" in document and "<script" in document
+    # Nothing fetched from anywhere.
+    assert "src=" not in document
+    assert 'rel="stylesheet"' not in document
+    assert "http://" not in document
+
+
+def test_the_dashboard_carries_its_data_inline(repository: Repository, finding_id: int) -> None:
+    from ctwatch.report.html import render_dashboard
+
+    document = render_dashboard(dossiers_for_target(repository, min_score=0.0))
+    start = document.index('<script id="findings" type="application/json">') + len(
+        '<script id="findings" type="application/json">'
+    )
+    payload = document[start : document.index("</script>", start)]
+    entries = json.loads(payload.replace("<\\/", "</"))
+
+    assert len(entries) == 1
+    assert entries[0]["domain"] == SUSPECT
+    assert entries[0]["contributions"]
+    assert entries[0]["evidence"]
+
+
+def test_the_dashboard_cannot_be_broken_by_a_domain_name(
+    repository: Repository, store: EvidenceStore, target: WatchTarget, config: Config
+) -> None:
+    """Names come from certificates, which are not a trusted input."""
+
+    from ctwatch.report.html import render_dashboard
+
+    evidence = store.capture(source="certspotter", endpoint="https://x/", content=b"[]")
+    hostile = "lemonde-script.info"
+    domain = repository.upsert_domain(name=hostile, unicode_name="</script><b>x</b>", is_idn=True)
+    repository.record_observation(
+        domain_id=domain.id, evidence_id=evidence.id, source="certspotter", target_id=target.id
+    )
+    assess_target(repository=repository, config=config, target=target, now=NOW)
+
+    document = render_dashboard(dossiers_for_target(repository, min_score=0.0))
+    assert "</script><b>x</b>" not in document
+    assert document.count("</script>") == 2
+
+
+def test_the_dashboard_says_nothing_was_contacted(repository: Repository, finding_id: int) -> None:
+    from ctwatch.report.html import render_dashboard
+
+    document = render_dashboard(dossiers_for_target(repository, min_score=0.0))
+    assert "No request was\n  made to any domain listed here" in document
+
+
+def test_an_empty_dashboard_still_renders(repository: Repository) -> None:
+    from ctwatch.report.html import render_dashboard
+
+    document = render_dashboard([])
+    assert "<!DOCTYPE html>" in document
+    assert 'id="findings"' in document

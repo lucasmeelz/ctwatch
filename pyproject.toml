@@ -80,6 +80,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
+# The dashboard is mostly an inlined HTML, CSS and JavaScript template. Wrapping
+# markup at a Python line length makes it harder to read, not easier.
+"src/ctwatch/report/html.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.11"

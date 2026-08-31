@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
@@ -30,6 +31,7 @@ from ctwatch.permutations.model import Permutation, PermutationKind
 from ctwatch.report.csv import render_csv
 from ctwatch.report.dossier import build_dossier, dossiers_for_target
 from ctwatch.report.evidence import export_finding
+from ctwatch.report.html import render_dashboard
 from ctwatch.report.markdown import render_report
 from ctwatch.scan import run_scan
 from ctwatch.sources.base import SourceError
@@ -393,6 +395,130 @@ def permutations(
         console.print(f"[dim]{len(produced)} candidate(s); nothing was contacted[/dim]")
 
     _emit(state, [_permutation_payload(permutation) for permutation in produced], render)
+
+
+REVIEW_STATUSES: tuple[str, ...] = ("reviewing", "confirmed", "dismissed", "new")
+
+
+@app.command()
+def review(
+    ctx: typer.Context,
+    finding_id: Annotated[int, typer.Argument(help="The finding to record a verdict on.")],
+    status: Annotated[
+        str,
+        typer.Option("--status", help="reviewing, confirmed, dismissed, or new."),
+    ],
+    note: Annotated[
+        str | None, typer.Option("--note", help="Why. Kept alongside the finding.")
+    ] = None,
+) -> None:
+    """Record a human verdict on a finding.
+
+    A verdict set here survives every later rescan and rescore: the tool is
+    allowed to change its own opinion, never someone else's.
+    """
+
+    state = _state(ctx)
+    config = _load(state)
+
+    chosen = status.strip().lower()
+    if chosen not in REVIEW_STATUSES:
+        _fail(
+            f"unknown status {status!r}; use one of: {', '.join(REVIEW_STATUSES)}",
+            state=state,
+        )
+        return
+
+    with open_database(config.storage.database) as connection:
+        repository = Repository(connection)
+        row = repository.get_finding(finding_id)
+        if row is None:
+            _fail(f"no finding with id {finding_id}", state=state)
+            return
+        repository.set_finding_status(finding_id, chosen, notes=note)
+        updated = repository.get_finding(finding_id)
+
+    if updated is None:  # pragma: no cover - it was just written
+        _fail(f"finding {finding_id} could not be re-read", state=state)
+        return
+
+    payload = {
+        "id": finding_id,
+        "domain": updated["domain_name"],
+        "status": updated["status"],
+        "note": updated["notes"],
+    }
+    _emit(
+        state,
+        payload,
+        lambda: console.print(f"{updated['domain_name']} marked [bold]{updated['status']}[/bold]"),
+    )
+
+
+@app.command()
+def dashboard(
+    ctx: typer.Context,
+    out: Annotated[Path, typer.Option("--out", help="Where to write the page.")] = Path(
+        "dashboard.html"
+    ),
+    target: Annotated[
+        str | None, typer.Option("--target", help="Restrict to one watched domain.")
+    ] = None,
+    min_score: Annotated[
+        float, typer.Option("--min-score", help="Only include findings at or above this.")
+    ] = 0.0,
+    include_allowlisted: Annotated[
+        bool,
+        typer.Option("--all", help="Also include domains suppressed as the brand's own."),
+    ] = False,
+    open_it: Annotated[
+        bool, typer.Option("--open/--no-open", help="Open the page in a browser.")
+    ] = False,
+) -> None:
+    """Write a browsable page of the findings. One file, no server.
+
+    The page carries its own data, so it works from the filesystem, needs no
+    network, and can be attached to an email or dropped in a shared folder.
+    """
+
+    state = _state(ctx)
+    config = _load(state)
+
+    with open_database(config.storage.database) as connection:
+        repository = Repository(connection)
+        sync_targets_from_config(repository, config)
+
+        watched = repository.list_targets()
+        target_id = None
+        if target is not None:
+            wanted = normalize(target).ascii_name
+            matches = [item for item in watched if item.canonical_domain == wanted]
+            if not matches:
+                _fail(f"not on the watchlist: {wanted}", state=state)
+                return
+            target_id = matches[0].id
+            watched = matches
+
+        dossiers = dossiers_for_target(
+            repository,
+            target_id=target_id,
+            min_score=min_score,
+            include_allowlisted=include_allowlisted,
+        )
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(render_dashboard(dossiers, targets=watched), encoding="utf-8")
+
+    if open_it:
+        webbrowser.open(out.resolve().as_uri())
+
+    payload = {"written_to": str(out), "findings": len(dossiers), "url": out.resolve().as_uri()}
+
+    def render() -> None:
+        console.print(f"{len(dossiers)} finding(s) written to {out}")
+        console.print(f"  [dim]open {out}[/dim]")
+
+    _emit(state, payload, render)
 
 
 @app.command()

@@ -335,3 +335,50 @@ def test_evidence_export_rejects_an_unknown_finding(workspace: Path) -> None:
     result = invoke("--json", "evidence", "export", "4242")
     assert result.exit_code == 1
     assert "no finding with id" in payload(result)["error"]
+
+
+def test_a_human_verdict_survives_a_rescore(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+    findings = payload(invoke("--json", "findings", "--min-score", "0"))
+    identifier = findings[0]["id"]
+
+    data = payload(
+        invoke("--json", "review", str(identifier), "--status", "confirmed", "--note", "published")
+    )
+    assert data["status"] == "confirmed"
+    assert data["note"] == "published"
+
+    # findings recomputes by default; the verdict must not be overwritten.
+    again = payload(invoke("--json", "findings", "--min-score", "0"))
+    kept = next(entry for entry in again if entry["id"] == identifier)
+    assert kept["status"] == "confirmed"
+
+
+def test_review_rejects_an_unknown_status(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+    findings = payload(invoke("--json", "findings", "--min-score", "0"))
+    result = invoke("--json", "review", str(findings[0]["id"]), "--status", "maybe")
+    assert result.exit_code == 1
+    assert "unknown status" in payload(result)["error"]
+
+
+def test_review_rejects_an_unknown_finding(workspace: Path) -> None:
+    invoke("--json", "init")
+    result = invoke("--json", "review", "4242", "--status", "confirmed")
+    assert result.exit_code == 1
+    assert "no finding with id" in payload(result)["error"]
+
+
+def test_dashboard_is_written_as_one_file(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+
+    destination = workspace / "dashboard.html"
+    data = payload(invoke("--json", "dashboard", "--min-score", "0", "--out", str(destination)))
+    assert data["findings"] >= 1
+    document = destination.read_text(encoding="utf-8")
+    assert document.startswith("<!DOCTYPE html>")
+    assert "lemonde-actu.info" in document
+    assert data["url"].startswith("file://")
