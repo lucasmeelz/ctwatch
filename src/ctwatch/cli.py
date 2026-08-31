@@ -27,6 +27,10 @@ from ctwatch.net.client import NetworkPolicyError
 from ctwatch.net.policy import allowed_hosts
 from ctwatch.permutations.generator import PermutationGenerator
 from ctwatch.permutations.model import Permutation, PermutationKind
+from ctwatch.report.csv import render_csv
+from ctwatch.report.dossier import build_dossier, dossiers_for_target
+from ctwatch.report.evidence import export_finding
+from ctwatch.report.markdown import render_report
 from ctwatch.scan import run_scan
 from ctwatch.sources.base import SourceError
 from ctwatch.store.database import open_database
@@ -59,6 +63,10 @@ app = typer.Typer(
 )
 target_app = typer.Typer(help="Manage the watchlist.", no_args_is_help=True)
 app.add_typer(target_app, name="target")
+evidence_app = typer.Typer(
+    help="Work with the archived responses behind a finding.", no_args_is_help=True
+)
+app.add_typer(evidence_app, name="evidence")
 
 
 def _state(ctx: typer.Context) -> AppState:
@@ -385,6 +393,125 @@ def permutations(
         console.print(f"[dim]{len(produced)} candidate(s); nothing was contacted[/dim]")
 
     _emit(state, [_permutation_payload(permutation) for permutation in produced], render)
+
+
+@app.command()
+def report(
+    ctx: typer.Context,
+    target: Annotated[
+        str | None, typer.Option("--target", help="Restrict to one watched domain.")
+    ] = None,
+    output_format: Annotated[str, typer.Option("--format", help="markdown or csv.")] = "markdown",
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Write to this file instead of stdout.")
+    ] = None,
+    min_score: Annotated[
+        float | None,
+        typer.Option("--min-score", help="Only include findings at or above this score."),
+    ] = None,
+    include_allowlisted: Annotated[
+        bool,
+        typer.Option("--all", help="Also include domains suppressed as the brand's own."),
+    ] = False,
+    limit: Annotated[
+        int | None, typer.Option("--limit", help="Stop after this many findings.")
+    ] = None,
+) -> None:
+    """Write an analysis report for the findings on record."""
+
+    state = _state(ctx)
+    config = _load(state)
+
+    chosen = output_format.strip().lower()
+    if chosen not in {"markdown", "md", "csv"}:
+        _fail(f"unknown format {output_format!r}; use markdown or csv", state=state)
+        return
+
+    threshold = config.scoring.review_threshold if min_score is None else min_score
+
+    with open_database(config.storage.database) as connection:
+        repository = Repository(connection)
+        sync_targets_from_config(repository, config)
+
+        target_id = None
+        scope = "every watched brand"
+        if target is not None:
+            wanted = normalize(target).ascii_name
+            matches = [t for t in repository.list_targets() if t.canonical_domain == wanted]
+            if not matches:
+                _fail(f"not on the watchlist: {wanted}", state=state)
+                return
+            target_id = matches[0].id
+            scope = f"{matches[0].brand} ({wanted})"
+
+        dossiers = dossiers_for_target(
+            repository,
+            target_id=target_id,
+            min_score=threshold,
+            include_allowlisted=include_allowlisted,
+            limit=limit,
+        )
+
+    document = render_csv(dossiers) if chosen == "csv" else render_report(dossiers, scope=scope)
+
+    if out is not None:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(document, encoding="utf-8")
+
+    payload = {
+        "format": "csv" if chosen == "csv" else "markdown",
+        "findings": len(dossiers),
+        "scope": scope,
+        "written_to": None if out is None else str(out),
+    }
+
+    def render() -> None:
+        if out is None:
+            console.print(document, markup=False, highlight=False)
+        else:
+            console.print(f"{len(dossiers)} finding(s) written to {out}")
+
+    if state.json_output:
+        _emit(state, payload)
+    else:
+        render()
+
+
+@evidence_app.command("export")
+def evidence_export(
+    ctx: typer.Context,
+    finding_id: Annotated[int, typer.Argument(help="The finding to document.")],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Directory to create. Defaults to ./exports/finding-<id>."),
+    ] = None,
+) -> None:
+    """Write a folder documenting one finding, checkable without this tool."""
+
+    state = _state(ctx)
+    config = _load(state)
+
+    with open_database(config.storage.database) as connection:
+        repository = Repository(connection)
+        dossier = build_dossier(repository, finding_id=finding_id)
+        if dossier is None:
+            _fail(f"no finding with id {finding_id}", state=state)
+            return
+
+        destination = out or Path("exports") / f"finding-{finding_id}"
+        store = EvidenceStore(config.storage.evidence_dir, repository)
+        result = export_finding(dossier, store=store, destination=destination)
+
+    def render() -> None:
+        console.print(f"wrote {result.directory}")
+        console.print(f"  {result.responses} archived response(s), {len(result.files)} file(s)")
+        console.print(
+            "  [dim]verify with `sha256sum -c MANIFEST.sha256` from inside that folder[/dim]"
+        )
+        for message in result.missing:
+            error_console.print(f"  [yellow]{message}[/yellow]")
+
+    _emit(state, result.as_dict(), render)
 
 
 @app.command()

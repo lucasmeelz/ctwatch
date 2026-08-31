@@ -271,3 +271,67 @@ def test_findings_rejects_an_unknown_target(workspace: Path) -> None:
 def test_findings_on_an_empty_database_is_not_an_error(workspace: Path) -> None:
     invoke("--json", "init")
     assert payload(invoke("--json", "findings")) == []
+
+
+def test_report_is_written_to_a_file(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+
+    destination = workspace / "rapport.md"
+    data = payload(
+        invoke(
+            "--json",
+            "report",
+            "--target",
+            "lemonde.fr",
+            "--format",
+            "markdown",
+            "--min-score",
+            "0",
+            "--out",
+            str(destination),
+        )
+    )
+    assert data["written_to"] == str(destination)
+    document = destination.read_text(encoding="utf-8")
+    assert "# Domain impersonation report" in document
+    assert "lemonde-actu.info" in document
+    assert "sha256sum" in document
+
+
+def test_report_can_be_csv(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+
+    destination = workspace / "findings.csv"
+    invoke("--json", "report", "--format", "csv", "--min-score", "0", "--out", str(destination))
+    header = destination.read_text(encoding="utf-8").splitlines()[0]
+    assert header.startswith("finding_id,brand,")
+
+
+def test_report_rejects_an_unknown_format(workspace: Path) -> None:
+    invoke("--json", "init")
+    result = invoke("--json", "report", "--format", "pdf")
+    assert result.exit_code == 1
+    assert "unknown format" in payload(result)["error"]
+
+
+def test_evidence_export_writes_a_checkable_folder(workspace: Path, offline_scan: None) -> None:
+    invoke("--json", "init")
+    invoke("--json", "scan", "--target", "lemonde.fr")
+    findings = payload(invoke("--json", "findings", "--min-score", "0"))
+    assert findings
+
+    data = payload(invoke("--json", "evidence", "export", str(findings[0]["id"])))
+    folder = Path(data["directory"])
+    assert data["responses"] >= 1
+    assert (folder / "MANIFEST.sha256").is_file()
+    assert (folder / "README.md").is_file()
+    assert (folder / "responses").is_dir()
+
+
+def test_evidence_export_rejects_an_unknown_finding(workspace: Path) -> None:
+    invoke("--json", "init")
+    result = invoke("--json", "evidence", "export", "4242")
+    assert result.exit_code == 1
+    assert "no finding with id" in payload(result)["error"]
