@@ -19,6 +19,7 @@ from ctwatch.net.client import PassiveHttpClient, UpstreamError
 from ctwatch.net.policy import build_allowlist
 from ctwatch.permutations.generator import PermutationGenerator
 from ctwatch.permutations.model import PermutationKind
+from ctwatch.publicsuffix import split
 from ctwatch.sources.base import CertObservation, Source, SourceError, SourceQuery
 from ctwatch.sources.certspotter import CertSpotterSource
 from ctwatch.sources.crtsh import CrtShSource
@@ -154,10 +155,12 @@ def persist_observation(
 
     for name in observation.names:
         was_known = repository.get_domain(name.ascii_name) is not None
+        parts = split(name.ascii_name)
         domain = repository.upsert_domain(
             name=name.ascii_name,
             unicode_name=name.unicode_name if name.is_idn else None,
-            tld=name.tld,
+            registrable_domain=parts.registrable_domain,
+            tld=parts.tld or name.tld,
             is_wildcard=name.is_wildcard,
             is_idn=name.is_idn,
             seen_at=observation.entry_timestamp or observation.retrieved_at,

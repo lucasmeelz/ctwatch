@@ -35,6 +35,7 @@ from ctwatch.notify.base import Alert, Notifier
 from ctwatch.notify.console import ConsoleNotifier
 from ctwatch.notify.jsonl import JsonlNotifier
 from ctwatch.notify.webhook import WebhookNotifier
+from ctwatch.publicsuffix import split
 from ctwatch.scan import run_scan
 from ctwatch.sources.certstream import (
     CertStreamClient,
@@ -127,10 +128,12 @@ def _persist_match(
     )
 
     name: DomainName = match.name
+    parts = split(name.ascii_name)
     domain = repository.upsert_domain(
         name=name.ascii_name,
         unicode_name=name.unicode_name if name.is_idn else None,
-        tld=name.tld,
+        registrable_domain=parts.registrable_domain,
+        tld=parts.tld or name.tld,
         is_wildcard=name.is_wildcard,
         is_idn=name.is_idn,
         seen_at=certificate.not_before or certificate.seen_at,
