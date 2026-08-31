@@ -282,10 +282,82 @@ def test_the_manifest_records_where_each_response_came_from(
 
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
     entry = manifest["responses"][0]
-    assert entry["endpoint"].startswith("https://api.certspotter.com/")
-    assert entry["retrieved_at"].endswith("+00:00")
     assert entry["content_sha256"] == hashlib.sha256(RESPONSE).hexdigest()
-    assert entry["content_sha256"] == entry["recorded_sha256"]
+
+    retrieval = entry["retrievals"][0]
+    assert retrieval["endpoint"].startswith("https://api.certspotter.com/")
+    assert retrieval["retrieved_at"].endswith("+00:00")
+    assert retrieval["status_code"] == 200
+
+
+def test_the_same_bytes_retrieved_twice_are_one_file_and_two_retrievals(
+    repository: Repository,
+    finding_id: int,
+    store: EvidenceStore,
+    target: WatchTarget,
+    tmp_path: Path,
+) -> None:
+    """Two copies of one response would suggest two findings where there is one."""
+
+    again = store.capture(
+        source="certspotter",
+        endpoint="https://api.certspotter.com/v1/issuances?domain=lemonde.fr",
+        content=RESPONSE,
+        requested_at=NOW,
+        status_code=200,
+    )
+    domain = repository.get_domain(SUSPECT)
+    assert domain is not None
+    repository.record_observation(
+        domain_id=domain.id, evidence_id=again.id, source="certspotter", target_id=target.id
+    )
+
+    dossier = build_dossier(repository, finding_id=finding_id)
+    assert dossier is not None
+    assert len(dossier.evidence) == 2
+
+    destination = tmp_path / "bundle"
+    result = export_finding(dossier, store=store, destination=destination, generated_at=NOW)
+
+    assert result.responses == 1
+    assert len(list((destination / "responses").iterdir())) == 1
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    assert len(manifest["responses"]) == 1
+    assert len(manifest["responses"][0]["retrievals"]) == 2
+
+
+def test_the_bundle_carries_the_enrichment_responses(
+    repository: Repository, finding_id: int, store: EvidenceStore, tmp_path: Path
+) -> None:
+    """A report citing a registrar must hand over the response it read it from."""
+
+    rdap = store.capture(
+        source="rdap",
+        endpoint="https://rdap.identitydigital.services/domain/lemonde-actu.info",
+        content=b'{"objectClassName": "domain"}',
+        requested_at=NOW,
+        status_code=200,
+    )
+    domain = repository.get_domain(SUSPECT)
+    assert domain is not None
+    repository.upsert_registration(
+        domain_id=domain.id,
+        evidence_id=rdap.id,
+        rdap_server="https://rdap.identitydigital.services",
+        registrar="Budget Registrar Ltd",
+        registered_at=None,
+        expires_at=None,
+        last_changed_at=None,
+    )
+
+    dossier = build_dossier(repository, finding_id=finding_id)
+    assert dossier is not None
+    assert any(record.source == "rdap" for record in dossier.evidence)
+
+    destination = tmp_path / "bundle"
+    export_finding(dossier, store=store, destination=destination, generated_at=NOW)
+    written = [path.name for path in (destination / "responses").iterdir()]
+    assert any("rdap" in name for name in written)
 
 
 def test_the_readme_says_what_the_archive_does_not_prove(

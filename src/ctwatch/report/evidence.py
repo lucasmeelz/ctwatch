@@ -117,8 +117,9 @@ def export_finding(
     result = ExportResult(directory=destination)
     manifest: list[dict[str, Any]] = []
     checksums: list[str] = []
+    by_digest: dict[str, dict[str, Any]] = {}
 
-    for position, record in enumerate(dossier.evidence, start=1):
+    for record in dossier.evidence:
         try:
             content = store.read(record)
         except (EvidenceError, OSError) as exc:
@@ -126,25 +127,39 @@ def export_finding(
             continue
 
         digest = sha256_hex(content)
+        retrieval = {
+            "evidence_id": record.id,
+            "source": record.source,
+            "endpoint": record.endpoint,
+            "retrieved_at": to_iso(record.requested_at),
+            "status_code": record.status_code,
+        }
+
+        existing = by_digest.get(digest)
+        if existing is not None:
+            # The same bytes retrieved twice is one file and two retrievals.
+            # Writing it twice would pad the folder and suggest two findings
+            # where there is one.
+            retrievals = existing["retrievals"]
+            if isinstance(retrievals, list):
+                retrievals.append(retrieval)
+            continue
+
+        position = len(by_digest) + 1
         filename = f"{position:04d}-{record.source}-{digest[:12]}.{_extension(content)}"
         (responses / filename).write_bytes(content)
         result.responses += 1
 
         relative = f"{RESPONSES_DIRECTORY}/{filename}"
         checksums.append(f"{digest}  {relative}")
-        manifest.append(
-            {
-                "file": relative,
-                "evidence_id": record.id,
-                "source": record.source,
-                "endpoint": record.endpoint,
-                "retrieved_at": to_iso(record.requested_at),
-                "status_code": record.status_code,
-                "content_sha256": digest,
-                "content_length": len(content),
-                "recorded_sha256": record.content_sha256,
-            }
-        )
+        entry: dict[str, Any] = {
+            "file": relative,
+            "content_sha256": digest,
+            "content_length": len(content),
+            "retrievals": [retrieval],
+        }
+        by_digest[digest] = entry
+        manifest.append(entry)
 
     manifest_document = {
         "tool": "ctwatch",

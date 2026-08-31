@@ -526,16 +526,28 @@ class Repository:
         return [int(row["evidence_id"]) for row in rows]
 
     def evidence_for_domain(self, domain_id: int) -> list[EvidenceRecord]:
-        """Every archived response this domain was seen in, oldest first."""
+        """Every archived response that says anything about this domain.
+
+        Not only the certificate listings it was seen in: a report that cites a
+        registrar has to be able to hand over the RDAP response it read that
+        from, and the same goes for resolution and page rendering.
+        """
 
         rows = self._connection.execute(
             """
-            SELECT DISTINCT evidence.* FROM evidence
-            JOIN observations ON observations.evidence_id = evidence.id
-            WHERE observations.domain_id = ?
+            SELECT evidence.* FROM evidence
+            WHERE evidence.id IN (
+                SELECT evidence_id FROM observations WHERE domain_id = :domain
+                UNION
+                SELECT evidence_id FROM registrations WHERE domain_id = :domain
+                UNION
+                SELECT evidence_id FROM dns_records WHERE domain_id = :domain
+                UNION
+                SELECT evidence_id FROM url_scans WHERE domain_id = :domain
+            )
             ORDER BY evidence.requested_at, evidence.id
             """,
-            (domain_id,),
+            {"domain": domain_id},
         ).fetchall()
         return [_evidence(row) for row in rows]
 
