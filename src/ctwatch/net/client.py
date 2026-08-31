@@ -46,21 +46,39 @@ class InsecureSchemeError(NetworkPolicyError):
 
 
 class HostAllowlist:
-    """Exact hostnames, plus ``*.example.com`` style subdomain wildcards."""
+    """Exact hostnames, plus ``*.example.com`` style subdomain wildcards.
 
-    def __init__(self, patterns: Iterable[str]) -> None:
-        exact: set[str] = set()
-        suffixes: set[str] = set()
+    Hosts arrive from two places and both are recorded. Most are declared in
+    the configuration. A few cannot be: RDAP is served by several hundred
+    registry servers that nobody can enumerate in advance, so those are learned
+    from IANA's bootstrap document at run time. Either way, every permitted
+    host has a stated origin, and that origin is never the domain under
+    investigation. :meth:`provenance` reports it.
+    """
+
+    def __init__(self, patterns: Iterable[str], *, origin: str = "configuration") -> None:
+        self._exact: dict[str, str] = {}
+        self._suffixes: dict[str, str] = {}
+        self.allow(patterns, origin=origin)
+
+    def allow(self, patterns: Iterable[str], *, origin: str) -> int:
+        """Permit more hosts, recording where the list came from.
+
+        ``origin`` is not decoration: it is what lets a reader check that no
+        host was ever added because a watched domain suggested it.
+        """
+
+        added = 0
         for pattern in patterns:
             cleaned = pattern.strip().lower().rstrip(".")
             if not cleaned:
                 continue
-            if cleaned.startswith("*."):
-                suffixes.add(cleaned[1:])
-            else:
-                exact.add(cleaned)
-        self._exact = frozenset(exact)
-        self._suffixes = frozenset(suffixes)
+            table = self._suffixes if cleaned.startswith("*.") else self._exact
+            key = cleaned[1:] if cleaned.startswith("*.") else cleaned
+            if key not in table:
+                table[key] = origin
+                added += 1
+        return added
 
     def permits(self, host: str | None) -> bool:
         if not host:
@@ -70,9 +88,18 @@ class HostAllowlist:
             return True
         return any(candidate.endswith(suffix) for suffix in self._suffixes)
 
+    def provenance(self) -> dict[str, str]:
+        """Every permitted host, mapped to where it was declared."""
+
+        combined = dict(self._exact)
+        combined.update({f"*{suffix}": origin for suffix, origin in self._suffixes.items()})
+        return dict(sorted(combined.items()))
+
+    def __len__(self) -> int:
+        return len(self._exact) + len(self._suffixes)
+
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        entries = sorted(self._exact | {f"*{suffix}" for suffix in self._suffixes})
-        return f"HostAllowlist({entries!r})"
+        return f"HostAllowlist({sorted(self.provenance())!r})"
 
 
 class HostAllowlistTransport(httpx.AsyncBaseTransport):

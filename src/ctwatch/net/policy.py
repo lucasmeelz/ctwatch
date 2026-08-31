@@ -30,6 +30,8 @@ def allowed_hosts(config: Config) -> list[str]:
         config.sources.crtsh.base_url,
         config.sources.certspotter.base_url,
         config.sources.certstream.url,
+        config.enrich.dns.resolver_url,
+        config.enrich.rdap.bootstrap_url,
     ):
         host = _host_of(url)
         if host:
@@ -40,4 +42,11 @@ def allowed_hosts(config: Config) -> list[str]:
 
 
 def build_allowlist(config: Config) -> HostAllowlist:
-    return HostAllowlist(allowed_hosts(config))
+    """The declared hosts.
+
+    RDAP registry servers are not here: they are learned at run time from
+    IANA's bootstrap document and added with that origin recorded, because no
+    configuration file can enumerate several hundred registries.
+    """
+
+    return HostAllowlist(allowed_hosts(config), origin="configuration")
